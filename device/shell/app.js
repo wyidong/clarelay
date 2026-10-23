@@ -23,7 +23,8 @@ const MY_V = (document.querySelector('script[src^="/app.js"]')?.getAttribute('sr
 let updateReady = false;
 function refreshAll() {
   try { sessionStorage.setItem('clarelay.reloadTo', JSON.stringify({ tab, device: view === 'device' ? current : null })); } catch {}
-  location.reload();
+  $('reload-ic').classList.add('spin'); document.body.classList.add('leaving');   // 转圈 + 淡出，看得出在刷新
+  setTimeout(() => location.reload(), 350);
 }
 $('update').onclick = refreshAll;
 $('reload-app').onclick = refreshAll;
@@ -141,7 +142,11 @@ function closeDevice() {
   render();
 }
 $('back').onclick = closeDevice;
-$('reload').onclick = () => { const f = frames.get(current); if (f) { f.iframe.remove(); frames.delete(current); } openDevice(current); };
+$('reload').onclick = () => {
+  const f = frames.get(current), btn = $('reload');
+  btn.classList.add('spin'); f?.iframe.classList.add('fading');
+  setTimeout(() => { if (f) { f.iframe.remove(); frames.delete(current); } openDevice(current).finally(() => setTimeout(() => btn.classList.remove('spin'), 500)); }, 250);
+};
 // 单独打开：领一张 10 分钟有效的一次性链接，在 Safari 里打开后可「添加到主屏幕」成为这台电脑自己的 App
 $('solo').onclick = async () => {
   const d = devices.find(x => x.id === current); if (!d) return;

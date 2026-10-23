@@ -83,6 +83,31 @@ input[type=checkbox]{width:22px;height:22px;accent-color:var(--acc)}
   #back{display:inline-block}
   #frames{margin-bottom:var(--bot)}
 }
+
+/* 设置：和 claclaw 一样的分组列表 */
+.glabel{margin:16px 6px 8px;color:var(--mut);font-size:13px}
+.glabel:first-child{margin-top:4px}
+.group{background:var(--card);border-radius:14px;overflow:hidden;margin-bottom:6px}
+.item{display:flex;align-items:center;gap:10px;padding:13px 16px;border-top:1px solid var(--line);min-height:54px}
+.item:first-child{border-top:0}
+#reload-app,#push-test{cursor:pointer}
+#reload-app:active,#push-test:active{background:var(--soft)}
+.item .grow{flex:1;min-width:0}
+.item small{display:block;color:var(--mut);font-size:12.5px;margin-top:2px}
+.item .chev{color:var(--mut);font-size:20px}
+.ri{width:24px;height:24px;flex:none;fill:none;stroke:var(--acc);stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.spin{animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+/* 刷新时整页淡出，加载后淡入：明显能看出刷新了 */
+#app{animation:appin .3s ease-out}
+@keyframes appin{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+body.leaving #app{opacity:.25;transition:opacity .25s}
+#frames iframe.fading{opacity:.25;transition:opacity .2s}
+/* 开关 */
+input.sw{appearance:none;-webkit-appearance:none;width:51px;height:31px;border-radius:16px;background:var(--line);position:relative;cursor:pointer;flex:none;border:0;padding:0;transition:background .2s}
+input.sw::after{content:'';position:absolute;top:2px;left:2px;width:27px;height:27px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.3);transition:left .2s}
+input.sw:checked{background:var(--acc)}
+input.sw:checked::after{left:22px}
 </style>
 </head>
 <body>
@@ -111,22 +136,25 @@ input[type=checkbox]{width:22px;height:22px;accent-color:var(--acc)}
         <div id="adm-sess"></div></section>
       </div>
       <div id="pane-set" class="pane hidden">
-        <section>
-          <div class="row" id="reload-app" style="cursor:pointer"><span class="grow">更新客户端<small id="reload-sub">重新加载，用上中继上的最新版本</small></span><span style="color:var(--acc);font-size:20px">↻</span></div>
-        </section>
-        <section><h3>本机通知</h3>
-          <div class="row"><span class="grow">这台手机接收推送<small>iPhone 要从主屏幕 App 里开启</small></span><button id="btn-push">开启通知</button></div>
-          <div class="row"><button id="push-test">发一条测试通知</button></div>
-        </section>
-        <section><h3>中继</h3>
-        <div class="row"><span class="grow">新设备要我批准才生效</span><input type="checkbox" id="set-approve" style="width:auto"></div>
-        <div class="row"><span class="grow">推送通知</span><input type="checkbox" id="set-notify" style="width:auto"></div>
-        <div class="row"><span class="grow">通知正文带前几个字<small>中继能看到这几个字；0 = 只发标题</small></span><input type="number" id="set-chars" min="0" max="200" style="width:90px"></div>
-        
-      </section>
-        <section><h3>账号</h3>
-          <div class="row"><span class="grow" id="me-info"></span><button class="bad" id="btn-logout">退出登录</button></div>
-        </section>
+        <div class="glabel">客户端</div>
+        <div class="group">
+          <div class="item" id="reload-app"><span class="grow">更新客户端<small id="reload-sub">重新加载，用上中继上的最新版本</small></span><svg class="ri" id="reload-ic" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/></svg></div>
+        </div>
+        <div class="glabel">通知</div>
+        <div class="group">
+          <div class="item"><span class="grow">这台手机接收推送<small>iPhone 要从主屏幕 App 里开启</small></span><button id="btn-push">开启通知</button></div>
+          <div class="item" id="push-test"><span class="grow">发一条测试通知</span><span class="chev">›</span></div>
+        </div>
+        <div class="glabel">中继</div>
+        <div class="group">
+          <div class="item"><span class="grow">新设备要我批准才生效</span><input type="checkbox" class="sw" id="set-approve"></div>
+          <div class="item"><span class="grow">推送通知</span><input type="checkbox" class="sw" id="set-notify"></div>
+          <div class="item"><span class="grow">通知正文带前几个字<small>中继能看到这几个字；0 = 只发标题</small></span><input type="number" id="set-chars" min="0" max="200" style="width:80px;text-align:right"></div>
+        </div>
+        <div class="glabel">账号</div>
+        <div class="group">
+          <div class="item"><span class="grow" id="me-info"></span><button class="bad" id="btn-logout">退出登录</button></div>
+        </div>
       </div>
     </div>
     <nav id="mtabs" aria-label="底部菜单">
