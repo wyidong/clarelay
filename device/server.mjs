@@ -8,6 +8,8 @@
 //   --http-port / --https-port  默认 80 / 443（测试时可以换）
 //   --acme  letsencrypt（默认）| staging（Let's Encrypt 测试环境）| devca（本地测试 CA，只用于测试）| selfsigned
 //   --email Let's Encrypt 账号邮箱（可选）
+//   和别的网站共用 80/443（前面是 Nginx）：--bind 127.0.0.1 --listen-https 18443 --listen-http 18080 --proxy-protocol
+//     （--https-port / --http-port 仍是对外的端口 443 / 80，用来拼网址；Nginx 配置见 deploy/nginx-clarelay.conf）
 //
 // 443 上按 TLS 里的域名分流：<圈子域名> 由中继自己解开（外壳 / 管理后台 / 接口）；<设备>.<圈子域名> 原样转给那台电脑。
 import http from 'node:http';
@@ -509,25 +511,37 @@ let ownCtx = tls.createSecureContext({ ...currentCert(), minVersion: 'TLSv1.2' }
 const internal = http.createServer(handle);   // TLS 在 serveTls() 里做
 internal.on('upgrade', upgrade);
 internal.headersTimeout = 30e3; internal.requestTimeout = 0;
+// --proxy-protocol：前面有 Nginx（stream + ssl_preread 按域名分流、proxy_protocol on）时，从 PROXY 头里取访问者真实 IP
+const PROXY_PROTO = argv.includes('--proxy-protocol');
 const front = net.createServer(sock => {
-  let buf = Buffer.alloc(0);
+  let buf = Buffer.alloc(0), clientIp = null;
   sock.on('error', () => {});
   const timer = setTimeout(() => sock.destroy(), 10e3);
   const onData = chunk => {
     buf = Buffer.concat([buf, chunk]);
+    if (PROXY_PROTO && clientIp === null) {
+      const i = buf.indexOf('\r\n');
+      if (i < 0) { if (buf.length > 108) sock.destroy(); return; }
+      const f = buf.subarray(0, i).toString('latin1').split(' ');
+      if (f[0] !== 'PROXY') { sock.destroy(); return; }
+      clientIp = f[1] === 'UNKNOWN' ? ipOf(sock) : f[2];
+      buf = buf.subarray(i + 2);
+      if (!buf.length) return;
+    }
     const r = parseSni(buf);
     if (r && r.need) return;
     clearTimeout(timer); sock.removeListener('data', onData); sock.pause();
     const sni = r?.sni || '';
-    if (!r || sni === DOMAIN || sni === '') { serveTls(internal, prefixed(sock, buf), () => ownCtx, ipOf(sock)); return; }
+    const ip = clientIp || ipOf(sock);
+    if (!r || sni === DOMAIN || sni === '') { serveTls(internal, prefixed(sock, buf), () => ownCtx, ip); return; }
     const label = sni.endsWith('.' + DOMAIN) ? sni.slice(0, -DOMAIN.length - 1) : '';
     const d = label && !label.includes('.') ? deviceByLabel(label) : null;
     const o = d && d.status === 'active' ? online.get(d.id) : null;
     if (!o) { sock.destroy(); return; }
     const pool = idle.get(d.id);
-    while (pool && pool.length) { const ds = pool.shift(); if (!ds.destroyed && ds.writable) { attach({ sock, buf, ip: ipOf(sock), port: sock.remotePort || 0 }, ds, d.id); o.send({ t: 'pool-used' }); return; } }
+    while (pool && pool.length) { const ds = pool.shift(); if (!ds.destroyed && ds.writable) { attach({ sock, buf, ip, port: sock.remotePort || 0 }, ds, d.id); o.send({ t: 'pool-used' }); return; } }
     const id = rand(12);
-    pendingOpen.set(id, { id, sock, buf, ip: ipOf(sock), port: sock.remotePort || 0, deviceId: d.id, timer: setTimeout(() => { pendingOpen.delete(id); sock.destroy(); }, 15e3) });
+    pendingOpen.set(id, { id, sock, buf, ip, port: sock.remotePort || 0, deviceId: d.id, timer: setTimeout(() => { pendingOpen.delete(id); sock.destroy(); }, 15e3) });
     o.send({ t: 'open', id });
   };
   sock.on('data', onData);
@@ -560,8 +574,8 @@ setInterval(() => {
 }, 30e3).unref();
 
 watchState();
-front.listen(HTTPS_PORT, arg('bind'), () => log(`clarelay 设备组网 ${DEVICE_VERSION}：https://${DOMAIN}${HTTPS_PORT === 443 ? '' : ':' + HTTPS_PORT}（443 端口 ${HTTPS_PORT}，证书 ${ACME_MODE}）`));
-if (HTTP_PORT) plain.listen(HTTP_PORT, arg('bind'), () => log('80 端口：' + HTTP_PORT));
+front.listen(Number(arg('listen-https', HTTPS_PORT)), arg('bind'), () => log(`clarelay 设备组网 ${DEVICE_VERSION}：https://${DOMAIN}${HTTPS_PORT === 443 ? '' : ':' + HTTPS_PORT}（443 端口 ${HTTPS_PORT}，证书 ${ACME_MODE}）`));
+if (HTTP_PORT) plain.listen(Number(arg('listen-http', HTTP_PORT)), arg('bind'), () => log('80 端口：' + HTTP_PORT));
 if (!S.admin) log('还没设置管理员：node device/server.mjs admin --data ' + DIR);
 setTimeout(ensureOwnCert, 1000);
 setInterval(ensureOwnCert, 12 * 3600e3).unref();
