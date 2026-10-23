@@ -30,6 +30,9 @@ input,select{font:inherit;padding:9px 11px;border:1px solid var(--line);border-r
 #side{width:380px;flex:none;border-right:1px solid var(--line);background:var(--bg);display:flex;flex-direction:column;min-height:0}
 #side>header{display:flex;align-items:center;gap:8px;padding:calc(var(--top) + 12px) 16px 10px;background:var(--card);border-bottom:1px solid var(--line)}
 #side>header b{flex:1;font-size:18px}
+#side>header #refresh{border:0;background:none;color:var(--acc);font-size:18px;padding:4px 6px}
+#update{padding:10px 16px;background:var(--acc);color:var(--acc-ink);font-weight:600;text-align:center;cursor:pointer}
+#ptr{text-align:center;color:var(--mut);font-size:13px;padding:8px 0;background:var(--bg)}
 #panes{flex:1;overflow:auto;-webkit-overflow-scrolling:touch}
 .pane{padding:12px 12px 20px}
 /* 宿主列表 */
@@ -93,7 +96,9 @@ input[type=checkbox]{width:22px;height:22px;accent-color:var(--acc)}
 </div>
 <div id="app" class="hidden">
   <aside id="side">
-    <header><b id="ptitle">宿主</b><span id="total" class="badge hidden"></span></header>
+    <header><b id="ptitle">宿主</b><span id="total" class="badge hidden"></span><button id="refresh" title="刷新">↻</button></header>
+    <div id="update" class="hidden">clarelay 有新版本，点这里刷新</div>
+    <div id="ptr" class="hidden">松开刷新</div>
     <div id="panes">
       <div id="pane-hosts" class="pane"><div id="devs"></div></div>
       <div id="pane-admin" class="pane hidden">

@@ -17,6 +17,24 @@ const ago = t => { if (!t) return ''; const s = (Date.now() - t) / 1000; return 
 let me = null, devices = [], unread = [], current = null, view = 'none', es = null, tab = 'hosts';
 const frames = new Map();          // 设备 id → { iframe, origin, ready, pendingOpen }
 const params = new URLSearchParams(location.search);
+const MY_V = (document.querySelector('script[src^="/app.js"]')?.getAttribute('src').match(/[?&]v=([\w-]+)/) || [])[1] || '';
+
+// ---------- 刷新 ----------
+// 主屏幕 App 没有浏览器的刷新按钮：右上角 ↻、列表下拉、版本更新提示、回到前台时自动重连
+function refreshAll() { location.reload(); }
+$('refresh').onclick = refreshAll;
+$('update').onclick = refreshAll;
+(() => {   // 下拉刷新（列表在顶部时往下拉）
+  const box = $('panes'); let y0 = null, pulled = 0;
+  box.addEventListener('touchstart', e => { y0 = box.scrollTop <= 0 ? e.touches[0].clientY : null; pulled = 0; }, { passive: true });
+  box.addEventListener('touchmove', e => { if (y0 == null) return; pulled = e.touches[0].clientY - y0; $('ptr').classList.toggle('hidden', pulled < 70); }, { passive: true });
+  box.addEventListener('touchend', () => { $('ptr').classList.add('hidden'); if (y0 != null && pulled >= 70) refreshAll(); y0 = null; });
+})();
+let hiddenAt = 0;
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') { hiddenAt = Date.now(); return; }
+  if (me && hiddenAt && Date.now() - hiddenAt > 30e3) connectEvents();   // 回到前台：重连实时更新（iOS 后台会断开）
+});
 
 // ---------- 登录 ----------
 function showLogin(err) { $('app').classList.add('hidden'); $('login').classList.remove('hidden'); $('lerr').textContent = err || ''; es?.close(); }
@@ -45,6 +63,7 @@ async function start() {
 function connectEvents() {
   es?.close();
   es = new EventSource('/api/events');
+  es.addEventListener('shell', e => { const v = JSON.parse(e.data).v; if (MY_V && v !== MY_V) $('update').classList.remove('hidden'); });
   es.addEventListener('devices', e => { devices = JSON.parse(e.data); render(); });
   es.addEventListener('unread', e => { unread = JSON.parse(e.data); render(); });
   es.addEventListener('sessions', () => { if (tab === 'admin') loadAdmin(); });

@@ -229,6 +229,10 @@ const SHELL_ORIGIN = 'https://' + DOMAIN + (HTTPS_PORT === 443 ? '' : ':' + HTTP
 const sameOrigin = req => req.headers.origin === SHELL_ORIGIN;
 const deviceAuth = req => { const t = String(req.headers.authorization || '').replace(/^Bearer /, ''); const id = String(req.headers['x-device-id'] || ''); const d = S.devices[id]; return d && d.status !== 'revoked' && safeEq(b64u(sha256(t)), d.tokenHash) ? d : null; };
 const SHELL_DIR = path.join(HERE, 'shell');
+// 外壳版本：所有外壳文件内容的哈希。页面引用 /app.js?v=<版本>（可长期缓存）；版本变了，已打开的外壳会提示刷新
+const shellVersion = () => { const h = crypto.createHash('sha256'); for (const f of fs.readdirSync(SHELL_DIR).sort()) h.update(f).update(fs.readFileSync(path.join(SHELL_DIR, f))); return h.digest('base64url').slice(0, 10); };
+let SHELL_V = shellVersion();
+fs.watch(SHELL_DIR, () => { clearTimeout(fs._clv); fs._clv = setTimeout(() => { const v = shellVersion(); if (v !== SHELL_V) { SHELL_V = v; log('外壳已更新：' + v); broadcast('shell', { v }); } }, 500); });
 const STATIC = { '/': ['index.html', 'text/html'], '/index.html': ['index.html', 'text/html'], '/app.js': ['app.js', 'text/javascript'], '/sw.js': ['sw.js', 'text/javascript'],
   '/manifest.webmanifest': ['manifest.webmanifest', 'application/manifest+json'], '/icon.svg': ['icon.svg', 'image/svg+xml'] };
 const SECURITY_HEADERS = {
@@ -296,7 +300,7 @@ async function handle(req, res) {
     if (!en) return notFound(res);
     if (p === '/' || p === '/index.html' || p === '/_auth') addCookie(res, proofCookie(en));
     if ((p === '/' || p === '/index.html') && req.method === 'GET') {
-      const html = fs.readFileSync(path.join(SHELL_DIR, 'index.html'), 'utf8').replace('href="/manifest.webmanifest"', 'href="/manifest.webmanifest?m=' + signTicket(SIGN_KEY, { k: 'mf', e: en.id, exp: Date.now() + 7 * 864e5 }) + '"');
+      const html = fs.readFileSync(path.join(SHELL_DIR, 'index.html'), 'utf8').replace('src="/app.js"', 'src="/app.js?v=' + SHELL_V + '"').replace('href="/manifest.webmanifest"', 'href="/manifest.webmanifest?m=' + signTicket(SIGN_KEY, { k: 'mf', e: en.id, exp: Date.now() + 7 * 864e5 }) + '"');
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', ...SECURITY_HEADERS }); return res.end(html);
     }
     if (p === '/manifest.webmanifest') {
@@ -309,7 +313,7 @@ async function handle(req, res) {
     // ---- 静态：外壳 ----
     if (STATIC[p] && req.method === 'GET') {
       const [f, type] = STATIC[p];
-      res.writeHead(200, { 'content-type': type + '; charset=utf-8', 'cache-control': f === 'sw.js' || f === 'index.html' ? 'no-cache' : 'max-age=300', ...SECURITY_HEADERS });
+      res.writeHead(200, { 'content-type': type + '; charset=utf-8', 'cache-control': f === 'sw.js' || f === 'index.html' ? 'no-cache' : f === 'app.js' && u.searchParams.get('v') === SHELL_V ? 'max-age=31536000, immutable' : 'no-cache', ...SECURITY_HEADERS });
       return res.end(fs.readFileSync(path.join(SHELL_DIR, f)));
     }
     // 直接打开某台电脑网址、没登录：门卫把人送到这里
@@ -348,7 +352,7 @@ async function handle(req, res) {
     }
     if (p === '/api/events') {
       res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', 'x-accel-buffering': 'no' });
-      res.write('event: devices\ndata: ' + JSON.stringify(deviceList()) + '\n\nevent: unread\ndata: ' + JSON.stringify(unreadList()) + '\n\n');
+      res.write('event: shell\ndata: ' + JSON.stringify({ v: SHELL_V }) + '\n\nevent: devices\ndata: ' + JSON.stringify(deviceList()) + '\n\nevent: unread\ndata: ' + JSON.stringify(unreadList()) + '\n\n');
       const c = { res, sid: s.sid }; sse.add(c);
       const ping = setInterval(() => res.write(': ping\n\n'), 25e3);
       req.on('close', () => { sse.delete(c); clearInterval(ping); viewing.delete(s.sid); });
