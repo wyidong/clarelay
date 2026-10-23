@@ -163,7 +163,7 @@ const r = await relayRequest(address, { method: 'POST', headers: {}, body: { hel
 r.status; r.headers; r.body /* Buffer */; r.text(); r.json(); r.e2e /* 是否经过端到端解密 */
 ```
 
-- `startTunnel`：邀请码错、口令错、指纹不对、连不上中继时直接 reject，不会重试；连上之后如果断线，每 5 秒自动重连。
+- `startTunnel`：邀请码错、口令错、指纹不对时直接 reject。中继连不上时，默认也直接 reject；传 `retry: true` 会一直重试（5 秒起，翻倍，最长 60 秒），命令行默认就是重试，加 `--no-retry` 关掉。连上之后如果断线，每 5 秒自动重连。
 - `relayRequest`：中继自己返回的错误（对方不在线 502、超时 504、限流 429）会以明文返回，此时 `e2e=false`。**如果收到的是明文的成功响应，一律当作被篡改，直接 reject。**
 - 本机服务收到的请求带 `x-forwarded-for`，值是中继看到的来源 IP（这个值由中继提供，见下文）。
 - 自己用 `pinnedConnector(pin)` 发 https 请求时，不要加 `agent: false`，否则 Node 会忽略 `createConnection`，指纹就不核对了。

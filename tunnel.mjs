@@ -18,7 +18,7 @@ import crypto from 'node:crypto';
 import tls from 'node:tls';
 import { fileURLToPath } from 'node:url';
 
-export const VERSION = '0.2.3';
+export const VERSION = '0.2.4';
 const INVITE_PREFIX = 'clarelay1.';
 const MAX_BODY = 1024 * 1024;
 
@@ -154,6 +154,7 @@ const defaultState = () => path.join(os.homedir(), '.relay-tunnel.json');
  * @param {string} o.to         本机服务地址，例如 http://127.0.0.1:8788
  * @param {string} [o.state]    记名字和隧道密钥的文件（默认 ~/.relay-tunnel.json），重启后公开地址不变
  * @param {number} [o.pollers]  同时等几个请求（默认 4）
+ * @param {boolean} [o.retry]   第一次登记遇到网络错误 / 中继暂时不可用时一直重试（默认 false：直接 reject）
  * @param {boolean} [o.plain]   也接受不加密的请求（默认 false：只接受端到端加密的请求）
  * @param {(s:{online:boolean,error?:string})=>void} [o.onStatus]  在线状态变化
  * @param {(...a)=>void} [o.log]
@@ -255,8 +256,18 @@ export async function startTunnel(o = {}) {
   }
 
   const q = '?name=' + encodeURIComponent(name);
-  const r = await relayCall('POST', '/_relay/register' + q, {}, 15e3);
-  if (r.status !== 200) throw new Error('登记失败：' + (r.j?.error || 'HTTP ' + r.status));
+  // 第一次登记：口令错、名字被占、指纹不对 → 直接 reject；retry 时网络错误 / 中继 5xx / 429 一直重试（5 秒起，翻倍，最长 60 秒）
+  let r;
+  for (let wait = 5000; ; wait = Math.min(wait * 2, 60e3)) {
+    let err;
+    try { r = await relayCall('POST', '/_relay/register' + q, {}, 15e3); } catch (e) { err = e; }
+    if (r && r.status === 200) break;
+    const fatal = (err && /指纹/.test(err.message)) || (r && r.status < 500 && r.status !== 429);
+    const msg = err ? err.message : (r.j?.error || 'HTTP ' + r.status);
+    if (!o.retry || fatal) throw new Error('登记失败：' + msg);
+    log('登记失败：' + msg + '，' + wait / 1000 + ' 秒后重试'); o.onStatus?.({ online: false, error: msg });
+    r = undefined; await new Promise(ok => setTimeout(ok, wait));
+  }
 
   let online = true;
   const setOnline = (v, error) => { if (v !== online) { online = v; o.onStatus?.(v ? { online } : { online, error }); } };
@@ -322,7 +333,7 @@ if (isMain && process.argv[2] === 'request') {
   }
   try {
     const t = await startTunnel({
-      invite, relay: arg('relay'), pin: arg('pin'), key: arg('key'), to: arg('to'), state: arg('state'), plain: argv.includes('--plain'),
+      invite, relay: arg('relay'), pin: arg('pin'), key: arg('key'), to: arg('to'), state: arg('state'), plain: argv.includes('--plain'), retry: !argv.includes('--no-retry'),
       log: (...a) => console.log(ts(), ...a),
       onStatus: s => console.log(ts(), s.online ? '已重新连上中继' : '和中继断开：' + s.error),
     });
