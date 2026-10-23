@@ -2,7 +2,7 @@
 import crypto from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
 
-export const DEVICE_VERSION = '0.3.1';
+export const DEVICE_VERSION = '0.3.2';
 export const INVITE_PREFIX = 'clarelay-device1.';
 export const b64u = b => Buffer.from(b).toString('base64url');
 export const unb64u = s => Buffer.from(String(s), 'base64url');

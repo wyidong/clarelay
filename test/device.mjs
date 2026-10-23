@@ -40,7 +40,9 @@ const api = (p, body, cookie) => call(DOMAIN, p, { method: body ? 'POST' : 'GET'
 
 // 假的 claclaw
 const seen = [];
-const app = http.createServer((q, s) => { seen.push({ url: q.url, headers: q.headers }); s.writeHead(200, { 'content-type': 'application/json', 'x-frame-options': 'DENY' }); s.end(JSON.stringify({ hello: 'claclaw', url: q.url })); });
+const app = http.createServer((q, s) => { seen.push({ url: q.url, headers: q.headers });
+  if (q.url === '/page') { s.writeHead(200, { 'content-type': 'text/html' }); return s.end('<html><head><link rel="manifest" href="/manifest.webmanifest"></head><body>claclaw</body></html>'); }
+  if (q.url === '/manifest.webmanifest') { s.writeHead(200, { 'content-type': 'application/manifest+json' }); return s.end(JSON.stringify({ name: 'claclaw', start_url: '/?pwa=1' })); } s.writeHead(200, { 'content-type': 'application/json', 'x-frame-options': 'DENY' }); s.end(JSON.stringify({ hello: 'claclaw', url: q.url })); });
 app.on('upgrade', (q, sock) => { sock.write('HTTP/1.1 101 Switching Protocols\r\nupgrade: websocket\r\nconnection: Upgrade\r\n\r\n'); sock.on('data', d => sock.write('echo:' + d)); });
 await new Promise(r => app.listen(0, '127.0.0.1', r));
 const APP = 'http://127.0.0.1:' + app.address().port;
@@ -115,6 +117,23 @@ assert.equal(h['x-forwarded-for'], '127.0.0.1', '来源 IP 被覆盖成真实 IP
 assert.equal(h['x-forwarded-proto'], 'https');
 assert.equal(h.host, host + ':' + HP, 'Host 原样保留');
 assert.equal(h.cookie, 'mine=1', '门卫 cookie 不交给应用');
+
+console.log('step 5');
+// 4b. 独立主屏幕 App：页面里的 manifest 链接被改写；manifest 不带 cookie 也能取；start_url 换门卫 cookie（一次性）
+const pg = await call(host, '/page', { headers: { cookie: gate, accept: 'text/html' } });
+const mhref = pg.text.match(/href="([^"]*_clarelay\/manifest[^"]*)"/)[1].replace(/&amp;/g, '&');
+const man = JSON.parse((await call(host, mhref)).text);
+assert.equal(man.name, 'claclaw'); assert.match(man.start_url, /^\/_clarelay\/start\?t=.*back=%2F%3Fpwa%3D1/);
+const stt = await call(host, man.start_url);
+assert.equal(stt.status, 302); assert.equal(stt.headers.location, '/?pwa=1'); assert.match(stt.headers['set-cookie'][0], /__Host-clarelay-gate=.*Max-Age=34560000/);
+assert.equal((await call(host, man.start_url)).status, 404, 'start 凭证只能用一次');
+// 已授权设备的凭证（Domain=圈子域名）：直接打开电脑网址会被送去外壳；没有凭证 404
+const shellPage = await call(DOMAIN, '/', { headers: { cookie: ENR } });
+const proof = shellPage.headers['set-cookie'].find(c => c.startsWith('__Secure-clarelay-proof=')).split(';')[0];
+assert.match(shellPage.headers['set-cookie'].find(c => c.startsWith('__Secure-clarelay-proof=')), /Domain=circle\.test/);
+const dir = await call(host, '/s/x', { headers: { cookie: proof, accept: 'text/html' } });
+assert.equal(dir.status, 302); assert.match(dir.headers.location, /\/_auth\?host=/);
+assert.equal((await call(host, '/s/x', { headers: { accept: 'text/html' } })).status, 404);
 
 console.log('step 5');
 // 5. WebSocket（Upgrade）经门卫

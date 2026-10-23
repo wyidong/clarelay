@@ -79,7 +79,7 @@ async function openDevice(id, back = '/', openTarget = null) {
   if (!d) return;
   current = id; view = 'device';
   document.body.classList.add('open');
-  $('admin').classList.add('hidden'); $('frames').classList.remove('hidden'); $('reload').classList.remove('hidden');
+  $('admin').classList.add('hidden'); $('frames').classList.remove('hidden'); $('reload').classList.remove('hidden'); $('solo').classList.remove('hidden');
   $('title').textContent = d.name + (frames.get(id)?.title ? ' · ' + frames.get(id).title : '');
   for (const [k, f] of frames) f.iframe.classList.toggle('hidden', k !== id);
   $('empty')?.classList.add('hidden');
@@ -111,6 +111,16 @@ function closeDevice() {
 }
 $('back').onclick = closeDevice;
 $('reload').onclick = () => { const f = frames.get(current); if (f) { f.iframe.remove(); frames.delete(current); } openDevice(current); };
+// 单独打开：领一张 10 分钟有效的一次性链接，在 Safari 里打开后可「添加到主屏幕」成为这台电脑自己的 App
+$('solo').onclick = async () => {
+  const d = devices.find(x => x.id === current); if (!d) return;
+  let url; try { url = (await api('/api/ticket', { device: d.id, long: true })).url; } catch (e) { return alert(e.message); }
+  const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone;
+  if (standalone) {
+    await navigator.clipboard?.writeText(url).catch(() => {});
+    alert(`已复制「${d.name}」的一次性链接（10 分钟内有效，只能用一次）。\n\n到 Safari 粘贴打开 → 登录 claclaw → 分享 →「添加到主屏幕」，就有了这台电脑自己的 App，可以单独收它的通知。`);
+  } else window.open(url, '_blank');
+};
 const post = (f, m) => f.iframe.contentWindow?.postMessage({ clarelay: 1, ...m }, f.origin);
 
 // ---------- 和嵌入应用通信 ----------
@@ -173,7 +183,7 @@ $('btn-logout').onclick = async () => { if (!confirm('退出登录？')) return;
 // ---------- 管理 ----------
 $('btn-admin').onclick = () => {
   view = 'admin'; current = null; document.body.classList.add('open');
-  $('frames').classList.add('hidden'); $('reload').classList.add('hidden'); $('admin').classList.remove('hidden');
+  $('frames').classList.add('hidden'); $('reload').classList.add('hidden'); $('solo').classList.add('hidden'); $('admin').classList.remove('hidden');
   $('title').textContent = '管理'; render(); loadAdmin();
 };
 async function loadAdmin() {

@@ -80,31 +80,77 @@ export async function startDevice(o = {}) {
   local.headersTimeout = 60e3; local.requestTimeout = 0; local.keepAliveTimeout = 65e3;
 
   // ---------- 门卫 ----------
-  let sids = new Set(), snippetChars = 20;
+  // 放行条件（任一）：本网址的门卫 cookie（由一次性通行票换来，绑定圈子登录 sid）。
+  // 没有门卫 cookie：若带着中继签发的「已授权设备」凭证（Domain=圈子域名 的 cookie）→ 送去外壳换通行票；否则一律 404。
+  // 独立主屏幕 App（iOS 的 cookie 和 Safari 分开）：页面里的 manifest 链接改写成带一次性凭证的地址，start_url 指向 /_clarelay/start 换门卫 cookie。
+  let sids = new Set(), enrolls = new Set(), snippetChars = 20;
   const usedTickets = new Map();
+  st.usedStarts ||= {};
   const hmac = s => crypto.createHmac('sha256', st.gateSecret).update(s).digest('base64url');
-  const gateCookie = sid => { const p = b64u(JSON.stringify({ sid, exp: Date.now() + 30 * 864e5 })); return p + '.' + hmac(p); };
-  function gateOk(req) {
-    const m = String(req.headers.cookie || '').match(/(?:^|;\s*)__Host-clarelay-gate=([A-Za-z0-9_.-]+)/);
-    if (!m) return false;
-    const [p, sig] = m[1].split('.');
-    if (!p || !sig || hmac(p) !== sig) return false;
-    try { const j = JSON.parse(Buffer.from(p, 'base64url').toString('utf8')); return j.exp > Date.now() && sids.has(j.sid); } catch { return false; }
+  const seal = obj => { const p = b64u(JSON.stringify(obj)); return p + '.' + hmac(p); };
+  const unseal = v => { const [p, sig] = String(v || '').split('.'); if (!p || !sig || hmac(p) !== sig) return null; try { return JSON.parse(Buffer.from(p, 'base64url').toString('utf8')); } catch { return null; } };
+  const GATE_AGE = 400 * 86400;
+  const gateCookie = sid => seal({ sid, exp: Date.now() + GATE_AGE * 1000 });
+  const setGate = sid => `${GATE}=${gateCookie(sid)}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=${GATE_AGE}`;
+  const cookieOf = (req, name) => { const m = String(req.headers.cookie || '').match(new RegExp('(?:^|;\\s*)' + name.replace(/[-]/g, '\\-') + '=([A-Za-z0-9_.-]+)')); return m ? m[1] : null; };
+  function gateSid(req) { const j = unseal(cookieOf(req, GATE)); return j && j.exp > Date.now() && sids.has(j.sid) ? j.sid : null; }
+  const gateOk = req => !!gateSid(req);
+  function enrolledProof(req) {   // 中继签的「已授权设备」凭证
+    const t = verifyTicket(st.gatePub, cookieOf(req, '__Secure-clarelay-proof'));
+    return !!(t && t.k === 'proof' && t.exp > Date.now() && enrolls.has(t.e));
   }
   const clientIp = req => realIp(req.socket);
   const frameHeaders = { 'content-security-policy': `frame-ancestors 'self' ${SHELL}` };
+  const notFound = res => { res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store', ...frameHeaders }); res.end('Not Found'); };
+  const safeBack = b => /^\/(?!\/)/.test(String(b || '')) ? String(b) : '/';
   function onRequest(req, res) {
     const u = new URL(req.url, URL_SELF);
     if (u.pathname === '/_clarelay/auth') {
       const t = verifyTicket(st.gatePub, u.searchParams.get('ticket'));
-      const back = String(u.searchParams.get('back') || '/');
-      if (!t || t.aud !== st.label || t.exp < Date.now() || usedTickets.has(t.n) || !sids.has(t.sid)) { res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', ...frameHeaders }); return res.end('Not Found'); }
+      if (!t || t.aud !== st.label || t.exp < Date.now() || usedTickets.has(t.n) || !sids.has(t.sid)) return notFound(res);
       usedTickets.set(t.n, t.exp); for (const [n, e] of usedTickets) if (e < Date.now()) usedTickets.delete(n);
-      res.writeHead(302, { location: /^\/(?!\/)/.test(back) ? back : '/', 'set-cookie': `${GATE}=${gateCookie(t.sid)}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=${30 * 86400}`, ...frameHeaders });
+      res.writeHead(302, { location: safeBack(u.searchParams.get('back')), 'set-cookie': setGate(t.sid), 'cache-control': 'no-store', ...frameHeaders });
       return res.end();
     }
-    if (!gateOk(req)) { res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', ...frameHeaders }); return res.end('Not Found'); }   // 没过门卫：什么都不给
+    if (u.pathname === '/_clarelay/start') {          // 独立主屏幕 App 第一次打开
+      const j = unseal(u.searchParams.get('t'));
+      if (!j || j.k !== 'start' || j.exp < Date.now() || st.usedStarts[j.n] || !sids.has(j.sid)) {
+        if (gateOk(req)) { res.writeHead(302, { location: safeBack(u.searchParams.get('back')) }); return res.end(); }
+        return notFound(res);
+      }
+      st.usedStarts[j.n] = j.exp; for (const [n, e] of Object.entries(st.usedStarts)) if (e < Date.now()) delete st.usedStarts[n]; saveState();
+      res.writeHead(302, { location: safeBack(u.searchParams.get('back')), 'set-cookie': setGate(j.sid), 'cache-control': 'no-store' });
+      return res.end();
+    }
+    if (u.pathname === '/_clarelay/manifest') {       // 浏览器取 manifest 可能不带 cookie：凭链接里的凭证
+      const j = unseal(u.searchParams.get('m'));
+      if (!j || j.k !== 'manifest' || j.exp < Date.now() || !sids.has(j.sid)) return notFound(res);
+      return serveManifest(req, res, j.sid, safeBack(u.searchParams.get('src')));
+    }
+    if (!gateOk(req)) {
+      if (req.method === 'GET' && /text\/html/.test(req.headers.accept || '') && enrolledProof(req)) {   // 已授权的设备直接打开本网址：去外壳换通行票
+        res.writeHead(302, { location: SHELL + '/_auth?host=' + st.label + '&back=' + encodeURIComponent(req.url), 'cache-control': 'no-store' }); return res.end();
+      }
+      return notFound(res);   // 其他人：什么都不给
+    }
     proxy(req, res);
+  }
+  function serveManifest(req, res, sid, src) {
+    const t = new URL(target), mod = t.protocol === 'https:' ? https : http;
+    const h = fwdHeaders(req); h['accept-encoding'] = 'identity'; delete h.cookie;
+    const up = mod.request({ host: t.hostname, port: t.port, method: 'GET', path: src, headers: h, setHost: false }, r => {
+      const c = []; r.on('data', d => c.push(d));
+      r.on('end', () => {
+        let m; try { m = JSON.parse(Buffer.concat(c).toString('utf8')); } catch { return notFound(res); }
+        const tok = seal({ k: 'start', sid, exp: Date.now() + 30 * 864e5, n: rand(12) });
+        m.start_url = '/_clarelay/start?t=' + tok + '&back=' + encodeURIComponent(safeBack(m.start_url || '/'));
+        m.scope ||= '/';
+        if (!m.id) m.id = '/';
+        res.writeHead(200, { 'content-type': 'application/manifest+json; charset=utf-8', 'cache-control': 'no-store' });
+        res.end(JSON.stringify(m));
+      });
+    });
+    up.on('error', () => notFound(res)); up.end();
   }
   function fwdHeaders(req) {
     const h = {};
@@ -115,10 +161,27 @@ export async function startDevice(o = {}) {
   }
   function proxy(req, res) {
     const t = new URL(target), mod = t.protocol === 'https:' ? https : http;
-    const up = mod.request({ host: t.hostname, port: t.port, method: req.method, path: req.url, headers: fwdHeaders(req), setHost: false }, r => {
+    const page = req.method === 'GET' && /text\/html/.test(req.headers.accept || '');   // 页面：要改写 manifest 链接，向应用要不压缩的
+    const h0 = fwdHeaders(req); if (page) h0['accept-encoding'] = 'identity';
+    const up = mod.request({ host: t.hostname, port: t.port, method: req.method, path: req.url, headers: h0, setHost: false }, r => {
       const h = { ...r.headers }; delete h['x-frame-options'];
       for (const k of Object.keys(h)) if (HOP.has(k)) delete h[k];
       if (!h['content-security-policy']?.includes('frame-ancestors')) Object.assign(h, frameHeaders);
+      if (page && /text\/html/.test(h['content-type'] || '') && !h['content-encoding']) {
+        const c = []; let n = 0;
+        r.on('data', d => { n += d.length; c.push(d); });
+        r.on('end', () => {
+          let html = Buffer.concat(c).toString('utf8');
+          const sid = gateSid(req);
+          if (sid && n < 4 * 1024 * 1024) html = html.replace(/(<link\b[^>]*\brel=["']?manifest["']?[^>]*\bhref=["'])([^"']+)(["'])/i, (all, a, href, b) => {
+            const src = href.startsWith('/') ? href : '/' + href.replace(/^\.\//, '');
+            return a + '/_clarelay/manifest?m=' + seal({ k: 'manifest', sid, exp: Date.now() + 7 * 864e5 }) + '&amp;src=' + encodeURIComponent(src) + b;
+          });
+          delete h['content-length']; delete h['etag'];
+          res.writeHead(r.statusCode, h); res.end(html);
+        });
+        return;
+      }
       res.writeHead(r.statusCode, h); r.pipe(res);
     });
     up.on('error', e => { if (!res.headersSent) { res.writeHead(502, { 'content-type': 'text/plain; charset=utf-8', ...frameHeaders }); res.end('本机应用连不上：' + e.message); } else res.destroy(); });
@@ -193,14 +256,14 @@ export async function startDevice(o = {}) {
   }
   function onCtrl(m) {
     if (m.t === 'hello') {
-      status = m.status; sids = new Set(m.sids || []); snippetChars = m.snippetChars ?? 20;
+      status = m.status; sids = new Set(m.sids || []); enrolls = new Set(m.enrolls || []); snippetChars = m.snippetChars ?? 20;
       if (m.name && m.name !== st.name) st.name = m.name;
       if (m.gatePub && m.gatePub !== st.gatePub) st.gatePub = m.gatePub;
       st.status = status; saveState();
       online = true; emitStatus(); log('已连上中继（' + (status === 'active' ? '已生效' : '等管理员批准') + '）：' + URL_SELF);
       if (status === 'active') ensureCert();
     } else if (m.t === 'open') openData(m.id);
-    else if (m.t === 'sessions') sids = new Set(m.sids || []);
+    else if (m.t === 'sessions') { sids = new Set(m.sids || []); if (m.enrolls) enrolls = new Set(m.enrolls); }
     else if (m.t === 'settings') snippetChars = m.snippetChars ?? snippetChars;
     else if (m.t === 'status') { status = m.status; st.status = status; if (m.name) st.name = m.name; saveState(); emitStatus(); if (status === 'active') ensureCert(); }
     else if (m.t === 'acme') sendCtrl?.({ t: 'acme', id: m.id, keyAuth: acmeTokens.get(m.token) || '' });
