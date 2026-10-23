@@ -25,9 +25,9 @@ input,select{font:inherit;padding:9px 11px;border:1px solid var(--line);border-r
 #login h1{margin:0 0 16px;font-size:22px}
 #login input{margin-bottom:10px}
 #login .err{color:var(--bad);min-height:1.4em;font-size:13px}
-#app{display:flex;height:100%}
+#app{display:flex;position:fixed;inset:0;height:100dvh}   /* iOS 主屏幕 App 里 height:100% 不到底，用 fixed 铺满整屏 */
 /* 左栏（手机上是整屏）：标题 + 当前分页 + 底部菜单 */
-#side{width:380px;flex:none;border-right:1px solid var(--line);background:var(--bg);display:flex;flex-direction:column;min-height:0}
+#side{width:380px;flex:none;height:100%;border-right:1px solid var(--line);background:var(--bg);display:flex;flex-direction:column;min-height:0}
 #side>header{display:flex;align-items:center;gap:8px;padding:calc(var(--top) + 12px) 16px 10px;background:var(--card);border-bottom:1px solid var(--line)}
 #side>header b{flex:1;font-size:18px}
 #side>header #refresh{border:0;background:none;color:var(--acc);font-size:18px;padding:4px 6px}
