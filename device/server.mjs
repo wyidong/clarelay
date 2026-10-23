@@ -97,14 +97,18 @@ if (ACME_MODE === 'devca') {
   if (!fs.existsSync(caF)) { const k = newKey(); fs.writeFileSync(caKeyF, keyPem(k), { mode: 0o600 }); fs.writeFileSync(caF, certificate({ key: k, cn: 'clarelay dev CA ' + DOMAIN, ca: true, days: 3650 })); }
   devCa = { key: loadKey(fs.readFileSync(caKeyF)), cert: fs.readFileSync(caF, 'utf8'), cn: 'clarelay dev CA ' + DOMAIN };
 }
+const coversDomain = cert => { try { return new crypto.X509Certificate(cert).subjectAltName.split(', ').includes('DNS:' + DOMAIN); } catch { return false; } };
+const certIssuer = cert => { try { return new crypto.X509Certificate(cert).issuer; } catch { return ''; } };
 function currentCert() {
-  try { const cert = fs.readFileSync(CERT_F, 'utf8'), key = fs.readFileSync(KEY_F, 'utf8'); if (expiresIn(cert) > 0) return { cert, key }; } catch {}
+  try { const cert = fs.readFileSync(CERT_F, 'utf8'), key = fs.readFileSync(KEY_F, 'utf8'); if (expiresIn(cert) > 0 && coversDomain(cert)) return { cert, key }; } catch {}
   const k = newKey(); return { cert: certificate({ key: k, hosts: [DOMAIN], days: 7 }), key: keyPem(k), temporary: true };
 }
 const acmeTokens = new Map();   // 中继自己证书的 HTTP-01：token → keyAuth
 async function ensureOwnCert() {
   let cur = null; try { cur = fs.readFileSync(CERT_F, 'utf8'); } catch {}
-  if (cur && expiresIn(cur) > 30 * 864e5) return;
+  // 换了域名、或者从测试环境（STAGING）换到正式环境：重新申请
+  const stagingCert = /STAGING|Fake/i.test(certIssuer(cur || ''));
+  if (cur && expiresIn(cur) > 30 * 864e5 && coversDomain(cur) && !(ACME_MODE === 'letsencrypt' && stagingCert)) return;
   if (ACME_MODE === 'selfsigned') return;
   try {
     let out;

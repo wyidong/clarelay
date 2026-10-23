@@ -215,7 +215,10 @@ export async function startDevice(o = {}) {
   let certBusy = false;
   async function ensureCert() {
     if (certBusy || status !== 'active') return;
-    if (st.cert && expiresIn(st.cert) > Math.max(10 * 864e5, (st.certLife || 90 * 864e5) / 3)) return;
+    const mode0 = o.acme || 'letsencrypt';
+    let issuer = ''; try { issuer = new crypto.X509Certificate(st.cert).issuer; } catch {}
+    const wrong = mode0 === 'letsencrypt' && /STAGING|Fake/i.test(issuer);
+    if (st.cert && !wrong && expiresIn(st.cert) > Math.max(10 * 864e5, (st.certLife || 90 * 864e5) / 3)) return;
     certBusy = true;
     try {
       const mode = o.acme || 'letsencrypt';
