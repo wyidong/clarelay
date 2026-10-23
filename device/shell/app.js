@@ -80,7 +80,7 @@ async function openDevice(id, back = '/', openTarget = null) {
   current = id; view = 'device';
   document.body.classList.add('open');
   $('admin').classList.add('hidden'); $('frames').classList.remove('hidden'); $('reload').classList.remove('hidden');
-  $('title').textContent = d.name;
+  $('title').textContent = d.name + (frames.get(id)?.title ? ' · ' + frames.get(id).title : '');
   for (const [k, f] of frames) f.iframe.classList.toggle('hidden', k !== id);
   $('empty')?.classList.add('hidden');
   let f = frames.get(id);
@@ -125,9 +125,10 @@ window.addEventListener('message', e => {
     f.ready = true; f.app = String(m.app || '');
     post(f, { type: 'embedded', shell: location.origin, version: me?.version });
     if (f.pendingOpen) { post(f, { type: 'open', target: f.pendingOpen }); f.pendingOpen = null; }
-  } else if (m.type === 'title' && id === current) {
+  } else if (m.type === 'title') {
+    f.title = String(m.text || '').slice(0, 80);
     const d = devices.find(x => x.id === id);
-    $('title').textContent = (d ? d.name + ' · ' : '') + String(m.text || '').slice(0, 80);
+    if (id === current && view === 'device') $('title').textContent = (d ? d.name + ' · ' : '') + f.title;
   } else if (m.type === 'viewing') {
     f.viewing = m.target ? String(m.target) : '';
     if (id === current && document.visibilityState === 'visible') api('/api/viewing', { device: id, app: f.app, target: f.viewing }).catch(() => {});
