@@ -164,6 +164,15 @@ r.status; r.headers; r.body /* Buffer */; r.text(); r.json(); r.e2e /* 是否经
 
 ---
 
+### 其他语言调用（不用自己实现加密）
+
+```sh
+echo '{"text":"hi"}' | node tunnel.mjs request '<地址#pin=…&key=…>' -X POST -H 'authorization: Bearer …' -H 'content-type: application/json' --stdin [--timeout 秒]
+# 标准输出一行 JSON：{"status","headers","e2e","body"}；失败时退出码 1，原因写在标准错误
+```
+
+Python：`subprocess.run(['node', 'tunnel.mjs', 'request', addr, '-X', 'POST', '--stdin'], input=data, capture_output=True)`。
+
 ## 超时：几处数字要放在一起看
 
 | 位置 | 默认 | 说明 |

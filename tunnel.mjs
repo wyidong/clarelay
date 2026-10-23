@@ -18,7 +18,7 @@ import crypto from 'node:crypto';
 import tls from 'node:tls';
 import { fileURLToPath } from 'node:url';
 
-export const VERSION = '0.2.1';
+export const VERSION = '0.2.2';
 const INVITE_PREFIX = 'clarelay1.';
 const MAX_BODY = 1024 * 1024;
 
@@ -290,7 +290,28 @@ export async function startTunnel(o = {}) {
 
 // ---------- 命令行 ----------
 const isMain = (() => { try { return fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url)); } catch { return false; } })();
-if (isMain) {
+// 发请求的命令行（给 Python 等其他语言调用，免得各自重写加密）：
+//   node tunnel.mjs request '<地址#pin=…&key=…>' [-X POST] [-H 'k: v']… [--stdin] [--timeout 秒]
+//   --stdin 从标准输入读请求体。标准输出一行 JSON：{"status","headers","e2e","body"(utf8 文本)}；
+//   失败（连不上、指纹不对、响应被篡改……）时标准错误输出原因，退出码 1。
+if (isMain && process.argv[2] === 'request') {
+  const a = process.argv.slice(3), headers = {};
+  let address = '', method = 'GET', useStdin = false, timeout = 11 * 60e3;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] === '-X') method = a[++i];
+    else if (a[i] === '-H') { const h = a[++i], j = h.indexOf(':'); headers[h.slice(0, j).trim()] = h.slice(j + 1).trim(); }
+    else if (a[i] === '--stdin') useStdin = true;
+    else if (a[i] === '--timeout') timeout = Number(a[++i]) * 1000;
+    else address = a[i];
+  }
+  try {
+    let body;
+    if (useStdin) { const c = []; for await (const x of process.stdin) c.push(x); body = Buffer.concat(c); }
+    const r = await relayRequest(address, { method, headers, body, timeout });
+    process.stdout.write(JSON.stringify({ status: r.status, headers: r.headers, e2e: r.e2e, body: r.text() }) + '\n');
+    process.exit(0);
+  } catch (e) { process.stderr.write(e.message + '\n'); process.exit(1); }
+} else if (isMain) {
   const argv = process.argv.slice(2);
   const arg = k => { const i = argv.indexOf('--' + k); return i >= 0 ? argv[i + 1] : undefined; };
   const invite = argv.find(a => a.includes(INVITE_PREFIX)) || arg('invite');
