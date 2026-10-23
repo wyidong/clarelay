@@ -342,7 +342,8 @@ async function handle(req, res) {
     const s = sessionOf(req);
     if (!s) return send(res, 401, { error: '没登录' });
     if (p === '/api/logout' && req.method === 'POST') { s.revoked = true; saveNow(); pushAccess(); return send(res, 200, { ok: true }, { 'set-cookie': `${COOKIE}=; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=0` }); }
-    if (p === '/api/me') return send(res, 200, { user: S.admin.user, admin: true, sid: s.sid, domain: DOMAIN, version: DEVICE_VERSION, settings: S.settings, vapid: S.vapid.pub });
+    if (p === '/api/version') return send(res, 200, { v: SHELL_V, version: DEVICE_VERSION });
+    if (p === '/api/me') return send(res, 200, { user: S.admin.user, admin: true, sid: s.sid, domain: DOMAIN, version: DEVICE_VERSION, shell: SHELL_V, settings: S.settings, vapid: S.vapid.pub });
     if (p === '/api/devices') return send(res, 200, { devices: deviceList(), unread: unreadList() });
     if (p === '/api/ticket' && req.method === 'POST') {
       const b = await body(req), d = S.devices[String(b.device || '')];

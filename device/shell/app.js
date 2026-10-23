@@ -19,21 +19,28 @@ const frames = new Map();          // 设备 id → { iframe, origin, ready, pen
 const params = new URLSearchParams(location.search);
 const MY_V = (document.querySelector('script[src^="/app.js"]')?.getAttribute('src').match(/[?&]v=([\w-]+)/) || [])[1] || '';
 
-// ---------- 刷新 ----------
-// 主屏幕 App 没有浏览器的刷新按钮：右上角 ↻、列表下拉、版本更新提示、回到前台时自动重连
-function refreshAll() { location.reload(); }
-$('refresh').onclick = refreshAll;
+// ---------- 更新客户端（和 claclaw 一样：设置里「更新客户端」+ 有新版本时顶部提示；刷新后回到原来的分页 / 宿主） ----------
+let updateReady = false;
+function refreshAll() {
+  try { sessionStorage.setItem('clarelay.reloadTo', JSON.stringify({ tab, device: view === 'device' ? current : null })); } catch {}
+  location.reload();
+}
 $('update').onclick = refreshAll;
-(() => {   // 下拉刷新（列表在顶部时往下拉）
-  const box = $('panes'); let y0 = null, pulled = 0;
-  box.addEventListener('touchstart', e => { y0 = box.scrollTop <= 0 ? e.touches[0].clientY : null; pulled = 0; }, { passive: true });
-  box.addEventListener('touchmove', e => { if (y0 == null) return; pulled = e.touches[0].clientY - y0; $('ptr').classList.toggle('hidden', pulled < 70); }, { passive: true });
-  box.addEventListener('touchend', () => { $('ptr').classList.add('hidden'); if (y0 != null && pulled >= 70) refreshAll(); y0 = null; });
-})();
+$('reload-app').onclick = refreshAll;
+function markUpdate(v) {
+  if (!v || !MY_V || v === MY_V || updateReady) return;
+  updateReady = true;
+  $('update').classList.remove('hidden');
+  $('reload-sub').textContent = '有新版本，点这里更新';
+  $('reload-sub').style.color = 'var(--acc)';
+}
+function checkVersion() { if (me) fetch('/api/version', { cache: 'no-store' }).then(r => r.json()).then(j => markUpdate(j.v)).catch(() => {}); }
+setInterval(() => { if (!document.hidden) checkVersion(); }, 5 * 60e3);
 let hiddenAt = 0;
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') { hiddenAt = Date.now(); return; }
   if (me && hiddenAt && Date.now() - hiddenAt > 30e3) connectEvents();   // 回到前台：重连实时更新（iOS 后台会断开）
+  checkVersion();
 });
 
 // ---------- 登录 ----------
@@ -57,13 +64,14 @@ async function start() {
   $('login').classList.add('hidden'); $('app').classList.remove('hidden');
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
   updatePushButton();
-  $('me-info').innerHTML = `${esc(me.user)}<small>${esc(me.domain)} · clarelay ${esc(me.version)}</small>`;
+  $('me-info').innerHTML = `${esc(me.user)}<small>${esc(me.domain)} · clarelay ${esc(me.version)} · 页面版本 ${esc(MY_V || '?')}</small>`;
+  markUpdate(me.shell);
   connectEvents();
 }
 function connectEvents() {
   es?.close();
   es = new EventSource('/api/events');
-  es.addEventListener('shell', e => { const v = JSON.parse(e.data).v; if (MY_V && v !== MY_V) $('update').classList.remove('hidden'); });
+  es.addEventListener('shell', e => markUpdate(JSON.parse(e.data).v));
   es.addEventListener('devices', e => { devices = JSON.parse(e.data); render(); });
   es.addEventListener('unread', e => { unread = JSON.parse(e.data); render(); });
   es.addEventListener('sessions', () => { if (tab === 'admin') loadAdmin(); });
@@ -257,4 +265,10 @@ $('set-approve').onchange = saveSettings; $('set-notify').onchange = saveSetting
 $('push-test').onclick = async () => { const r = await api('/api/push/test', {}); alert(r.sent ? '已发出，看看手机' : '这个浏览器还没开启通知'); };
 
 // ---------- 进入 ----------
-start().then(() => { if (params.get('open')) handleOpen(params.get('open')); history.replaceState(null, '', '/'); });
+start().then(() => {
+  let back = null; try { back = JSON.parse(sessionStorage.getItem('clarelay.reloadTo') || 'null'); sessionStorage.removeItem('clarelay.reloadTo'); } catch {}
+  if (back?.tab && back.tab !== 'hosts') setTab(back.tab);
+  if (back?.device) { const go = () => devices.length ? openDevice(back.device) : setTimeout(go, 300); setTimeout(go, 300); }
+  if (params.get('open')) handleOpen(params.get('open'));
+  history.replaceState(null, '', '/');
+});
