@@ -185,7 +185,7 @@ async function loadAdmin() {
       ${d.status === 'pending' ? `<button class="pri" data-dev="${esc(d.id)}" data-act="approve">批准</button>` : ''}
       ${d.status !== 'revoked' ? `<button data-dev="${esc(d.id)}" data-act="rename">改名</button><button class="bad" data-dev="${esc(d.id)}" data-act="revoke">撤销</button>` : `<button class="bad" data-dev="${esc(d.id)}" data-act="delete">删除</button>`}
     </div>`).join('') : '<small>还没有设备</small>';
-  $('adm-sess').innerHTML = s.sessions.map(x => `<div class="row"><span class="grow">${esc(x.ua)}${x.current ? ' <span class="pill">本机</span>' : ''}<small>${esc(x.ip || '')} · 最后活动 ${ago(x.lastSeen)}${x.push ? ' · 已开通知' : ''}</small></span>${x.current ? '' : `<button class="bad" data-sid="${esc(x.sid)}">撤销</button>`}</div>`).join('');
+  $('adm-sess').innerHTML = s.enrolls.map(x => `<div class="row"><span class="grow">${esc(x.note || x.ua)}${x.current ? ' <span class="pill">本机</span>' : ''}<small>${esc(x.ua)} · ${esc(x.via || '')} · ${esc(x.ip || '')} · 最后活动 ${ago(x.lastSeen)}${x.loggedIn ? ' · 已登录' : ' · 未登录'}${x.push ? ' · 已开通知' : ''}</small></span>${x.current ? '' : `<button class="bad" data-enr="${esc(x.id)}">取消授权</button>`}</div>`).join('');
   $('set-approve').checked = s.settings.requireApproval; $('set-notify').checked = s.settings.notify; $('set-chars').value = s.settings.snippetChars;
   for (const b of document.querySelectorAll('[data-inv]')) b.onclick = async () => { await api('/api/admin/invite/delete', { id: b.dataset.inv }); loadAdmin(); };
   for (const b of document.querySelectorAll('[data-dev]')) b.onclick = async () => {
@@ -195,8 +195,16 @@ async function loadAdmin() {
     if (act === 'revoke' && !confirm(`撤销「${d.name}」？它会立刻断开，要重新邀请才能加入。`)) return;
     await api('/api/admin/device', { id: d.id, action: act, name }).catch(e => alert(e.message)); loadAdmin();
   };
-  for (const b of document.querySelectorAll('[data-sid]')) b.onclick = async () => { if (!confirm('撤销这个浏览器的登录？')) return; await api('/api/admin/session', { sid: b.dataset.sid, action: 'revoke' }); loadAdmin(); };
+  for (const b of document.querySelectorAll('[data-enr]')) b.onclick = async () => { if (!confirm('取消这台设备的授权？它会立刻退出，之后打开只会看到 404。')) return; await api('/api/admin/enrollment', { id: b.dataset.enr, action: 'revoke' }); loadAdmin(); };
 }
+$('enr-new').onclick = async () => {
+  const r = await api('/api/admin/enroll', { note: $('enr-note').value.trim() });
+  const out = $('enroll-out');
+  out.innerHTML = `<div>${esc(r.url)}</div><div style="margin-top:8px"><button id="enr-copy">复制</button> <small>${r.minutes} 分钟内在新设备上打开，只能用一次。iPhone：用 Safari 打开 → 登录 →「添加到主屏幕」。</small></div>`;
+  out.classList.remove('hidden');
+  $('enr-copy').onclick = () => navigator.clipboard.writeText(r.url).then(() => { $('enr-copy').textContent = '已复制'; });
+  $('enr-note').value = '';
+};
 $('inv-new').onclick = async () => {
   const r = await api('/api/admin/invite', { note: $('inv-note').value.trim(), hours: Number($('inv-hours').value) });
   const out = $('invite-out');

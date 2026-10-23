@@ -92,7 +92,11 @@ input, select { font: inherit; padding:8px 10px; border:1px solid var(--line); b
         <div id="inv-list"></div>
       </section>
       <section><h3>设备</h3><div id="adm-devs"></div></section>
-      <section><h3>已登录的浏览器</h3><div id="adm-sess"></div></section>
+      <section><h3>已授权的设备（手机 / 浏览器）</h3>
+        <small style="color:var(--mut)">没授权的浏览器打开 clarelay 和各台电脑的网址都只会看到 404，连登录框都没有。</small>
+        <div class="row"><input class="grow" id="enr-note" placeholder="备注，比如：iPad"><button class="pri" id="enr-new">授权新设备</button></div>
+        <div id="enroll-out" class="hidden" style="word-break:break-all;font:12px ui-monospace,Menlo,monospace;background:var(--bg);padding:10px;border-radius:8px;margin-top:6px"></div>
+        <div id="adm-sess"></div></section>
       <section><h3>设置</h3>
         <div class="row"><span class="grow">新设备要我批准才生效</span><input type="checkbox" id="set-approve" style="width:auto"></div>
         <div class="row"><span class="grow">推送通知</span><input type="checkbox" id="set-notify" style="width:auto"></div>

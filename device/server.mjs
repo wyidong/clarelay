@@ -34,7 +34,7 @@ const log = (...a) => console.log(new Date().toISOString().slice(0, 19).replace(
 
 // ---------- 状态 ----------
 let S = {}; try { S = JSON.parse(fs.readFileSync(STATE_F, 'utf8')); } catch {}
-S.devices ||= {}; S.invites ||= {}; S.sessions ||= {}; S.push ||= {}; S.unread ||= {};
+S.devices ||= {}; S.invites ||= {}; S.sessions ||= {}; S.push ||= {}; S.unread ||= {}; S.enrolls ||= {}; S.enrollCodes ||= {}; S.transfers ||= {};
 S.settings = { requireApproval: true, snippetChars: 20, notify: true, ...(S.settings || {}) };
 if (!S.signKey) { const kp = crypto.generateKeyPairSync('ed25519'); S.signKey = kp.privateKey.export({ type: 'pkcs8', format: 'pem' }); S.signPub = kp.publicKey.export({ type: 'spki', format: 'pem' }); }
 if (!S.vapid) S.vapid = newVapid();
@@ -52,6 +52,7 @@ function watchState() {
     lastWrite = st.mtimeMs;
     if (disk.admin && JSON.stringify(disk.admin) !== JSON.stringify(S.admin)) { S.admin = disk.admin; log('管理员已更新'); }
     for (const [c, v] of Object.entries(disk.invites || {})) if (!S.invites[c]) S.invites[c] = v;
+    for (const [c, v] of Object.entries(disk.enrollCodes || {})) if (!S.enrollCodes[c]) S.enrollCodes[c] = v;
     let revoked = false;
     for (const [k, v] of Object.entries(disk.sessions || {})) if (v.revoked && S.sessions[k] && !S.sessions[k].revoked) { S.sessions[k].revoked = true; revoked = true; }
     if (revoked) pushToDevices({ t: 'sessions', sids: activeSids() });
@@ -86,6 +87,13 @@ function newInvite(note = '', hours = 24) {
   S.invites[code] = { created: Date.now(), expires: Date.now() + hours * 3600e3, note: String(note).slice(0, 80) };
   save(); return makeDeviceInvite({ domain: DOMAIN, code, port: HTTPS_PORT });
 }
+function newEnrollCode(note = '') {
+  const code = rand(24);
+  S.enrollCodes[code] = { created: Date.now(), expires: Date.now() + 10 * 60e3, note: String(note).slice(0, 80) };
+  save(); return SHELL_ORIGIN_EARLY() + '/enroll?c=' + code;
+}
+function SHELL_ORIGIN_EARLY() { return 'https://' + DOMAIN + (HTTPS_PORT === 443 ? '' : ':' + HTTPS_PORT); }
+if (CMD === 'enroll') { const url = newEnrollCode(arg('note', '命令行生成')); saveNow(); console.log(url + '\n（10 分钟内在要授权的设备上打开，只能用一次）'); process.exit(0); }
 if (CMD === 'invite') { const inv = newInvite(arg('note', '命令行生成'), Number(arg('hours', 24))); saveNow(); console.log(inv); process.exit(0); }
 
 // ---------- 证书 ----------
@@ -182,9 +190,28 @@ function sessionOf(req) {
   if (!m) return null;
   const s = S.sessions[b64u(sha256(m[1]))];
   if (!s || s.revoked) return null;
+  if (s.enroll && !Object.values(S.enrolls).some(e => e.id === s.enroll && !e.revoked)) return null;
   if (Date.now() - (s.lastSeen || 0) > 60e3) { s.lastSeen = Date.now(); save(); }
   return s;
 }
+// ---------- 授权设备（浏览器）：没授权的浏览器看到的一律是 404，连登录框都没有 ----------
+const ENROLL = '__Host-clarelay-dev';
+const enrollCookie = secret => `${ENROLL}=${secret}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=${400 * 86400}`;
+function enrollOf(req) {
+  const m = String(req.headers.cookie || '').match(/(?:^|;\s*)__Host-clarelay-dev=([A-Za-z0-9_-]+)/);
+  const e = m && S.enrolls[b64u(sha256(m[1]))];
+  if (!e || e.revoked) return null;
+  if (Date.now() - (e.lastSeen || 0) > 60e3) { e.lastSeen = Date.now(); save(); }
+  return e;
+}
+function newEnroll(req, via, note = '') {
+  const secret = rand(32), e = { id: rand(9), created: Date.now(), lastSeen: Date.now(), ua: uaName(req.headers['user-agent']), ip: realIp(req.socket), via, note };
+  S.enrolls[b64u(sha256(secret))] = e; saveNow();
+  log('授权设备：' + e.ua + '（' + via + '）', e.ip);
+  return { e, cookie: enrollCookie(secret) };
+}
+function notFound(res) { if (res.writableEnded) return; res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' }); res.end('Not Found'); }
+const enrollLimit = limiter(20, 15 * 60e3);
 const uaName = ua => { ua = String(ua || ''); const dev = /iPhone/.test(ua) ? 'iPhone' : /iPad/.test(ua) ? 'iPad' : /Android/.test(ua) ? 'Android' : /Macintosh/.test(ua) ? 'Mac' : /Windows/.test(ua) ? 'Windows' : '浏览器'; const br = /Edg\//.test(ua) ? 'Edge' : /Chrome\//.test(ua) ? 'Chrome' : /Firefox\//.test(ua) ? 'Firefox' : /Safari\//.test(ua) ? 'Safari' : ''; return dev + (br ? ' · ' + br : ''); };
 
 // ---------- HTTP 小工具 ----------
@@ -212,7 +239,7 @@ async function handle(req, res) {
     if (p === '/_device/join' && req.method === 'POST') {
       if (loginLimitIp('join:' + ip)) return send(res, 429, { error: '请求太频繁' });
       const b = await body(req), inv = S.invites[String(b.code || '')];
-      if (!inv || inv.usedBy || inv.expires < Date.now()) return send(res, 403, { error: '邀请码无效、已用过或已过期' });
+      if (!inv || inv.usedBy || inv.expires < Date.now()) return send(res, 404, { error: '邀请码无效、已用过或已过期' });
       const id = rand(9), token = rand(32);
       let label; do label = randLabel(); while (deviceByLabel(label));
       S.devices[id] = { id, label, name: String(b.name || '电脑').slice(0, 40), tokenHash: b64u(sha256(token)), status: S.settings.requireApproval ? 'pending' : 'active', created: Date.now(), invite: inv.note, ip };
@@ -230,7 +257,38 @@ async function handle(req, res) {
       return send(res, 200, { cert: cert + devCa.cert });
     }
     if (p === '/_device/ca') return devCa ? send(res, 200, { ca: devCa.cert }) : send(res, 404, { error: 'no' });
-    if (p === '/_relay/version' || p === '/_device/version') return send(res, 200, { ok: true, name: 'clarelay-device', version: DEVICE_VERSION });
+    if ((p === '/_relay/version' || p === '/_device/version') && deviceAuth(req)) return send(res, 200, { ok: true, name: 'clarelay-device', version: DEVICE_VERSION });
+
+    // ---- 授权门：一次性授权链接、主屏幕 App 的授权转移、老登录自动转授权；其余没授权一律 404 ----
+    if (p === '/enroll' && req.method === 'GET') {
+      if (enrollLimit(ip)) return notFound(res);
+      const code = String(u.searchParams.get('c') || ''), c = S.enrollCodes[code];
+      if (!c || c.used || c.expires < Date.now()) { log('无效授权链接', ip); return notFound(res); }
+      c.used = Date.now();
+      const { cookie } = newEnroll(req, '授权链接', c.note);
+      res.writeHead(302, { location: '/', 'set-cookie': cookie, 'cache-control': 'no-store' }); return res.end();
+    }
+    let en = enrollOf(req);
+    if (p === '/' && u.searchParams.get('t')) {    // iPhone 主屏幕 App：cookie 和 Safari 不共用，靠 start_url 里的一次性凭证转过来
+      const k = b64u(sha256(String(u.searchParams.get('t')))), t = S.transfers[k];
+      if (!en && t && !t.used && t.expires > Date.now() && Object.values(S.enrolls).some(e => e.id === t.from && !e.revoked)) {
+        t.used = Date.now();
+        const { cookie } = newEnroll(req, '主屏幕 App');
+        res.writeHead(302, { location: '/', 'set-cookie': cookie, 'cache-control': 'no-store' }); return res.end();
+      }
+      if (en) { res.writeHead(302, { location: '/' }); return res.end(); }
+    }
+    if (!en) {
+      const s0 = sessionOf(req);
+      if (s0 && !s0.enroll) { const r = newEnroll(req, '已有登录'); en = r.e; s0.enroll = en.id; save(); res.setHeader('set-cookie', [r.cookie]); }
+    }
+    if (!en) return notFound(res);
+    if (p === '/manifest.webmanifest') {
+      for (const [k, t] of Object.entries(S.transfers)) if (t.from === en.id || t.expires < Date.now() || t.used) delete S.transfers[k];
+      const tok = rand(24); S.transfers[b64u(sha256(tok))] = { from: en.id, expires: Date.now() + 7 * 864e5 }; save();
+      const m = JSON.parse(fs.readFileSync(path.join(SHELL_DIR, 'manifest.webmanifest'), 'utf8')); m.start_url = '/?t=' + tok;
+      res.writeHead(200, { 'content-type': 'application/manifest+json; charset=utf-8', 'cache-control': 'no-store' }); return res.end(JSON.stringify(m));
+    }
 
     // ---- 静态：外壳 ----
     if (STATIC[p] && req.method === 'GET') {
@@ -247,7 +305,7 @@ async function handle(req, res) {
     }
 
     // ---- 接口 ----
-    if (!p.startsWith('/api/')) return send(res, 404, { error: 'not found' });
+    if (!p.startsWith('/api/')) return notFound(res);
     if (req.method === 'POST' && !sameOrigin(req)) return send(res, 403, { error: '来源不对' });
     if (p === '/api/login' && req.method === 'POST') {
       if (loginLimitIp(ip) || loginLimitAll('all')) return send(res, 429, { error: '尝试太多次，稍后再试' });
@@ -256,7 +314,7 @@ async function handle(req, res) {
       const ok = safeEq(String(b.user || ''), S.admin.user) & safeEq(scryptHash(String(b.pass || ''), S.admin.salt), S.admin.hash);
       if (!ok) { log('登录失败', ip); return send(res, 401, { error: '用户名或密码不对' }); }
       const secret = rand(32), sid = rand(9);
-      S.sessions[b64u(sha256(secret))] = { sid, created: Date.now(), lastSeen: Date.now(), ua: uaName(req.headers['user-agent']), ip };
+      S.sessions[b64u(sha256(secret))] = { sid, created: Date.now(), lastSeen: Date.now(), ua: uaName(req.headers['user-agent']), ip, enroll: en.id };
       saveNow(); log('登录', ip, uaName(req.headers['user-agent']));
       pushToDevices({ t: 'sessions', sids: activeSids() }); broadcast('sessions', 1);
       return send(res, 200, { ok: true }, { 'set-cookie': `${COOKIE}=${secret}; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=${30 * 86400}` });
@@ -305,7 +363,21 @@ async function handle(req, res) {
         invites: Object.entries(S.invites).filter(([, v]) => !v.usedBy && v.expires > now).map(([code, v]) => ({ id: b64u(sha256(code)).slice(0, 10), note: v.note, expires: v.expires, created: v.created })),
         sessions: Object.entries(S.sessions).filter(([, v]) => !v.revoked).map(([, v]) => ({ sid: v.sid, ua: v.ua, ip: v.ip, created: v.created, lastSeen: v.lastSeen, current: v.sid === s.sid, push: (S.push[v.sid] || []).length })),
         settings: S.settings,
+        enrolls: Object.values(S.enrolls).filter(e => !e.revoked).map(e => ({ id: e.id, ua: e.ua, note: e.note, via: e.via, ip: e.ip, created: e.created, lastSeen: e.lastSeen, current: e.id === en.id,
+          loggedIn: Object.values(S.sessions).some(v => v.enroll === e.id && !v.revoked), push: Object.values(S.sessions).some(v => v.enroll === e.id && !v.revoked && (S.push[v.sid] || []).length) })),
       });
+    }
+    if (p === '/api/admin/enroll' && req.method === 'POST') { const b = await body(req); return send(res, 200, { url: newEnrollCode(b.note || ''), minutes: 10 }); }
+    if (p === '/api/admin/enrollment' && req.method === 'POST') {
+      const b = await body(req);
+      const e = Object.values(S.enrolls).find(x => x.id === b.id);
+      if (!e) return send(res, 404, { error: '没有这台设备' });
+      if (b.action === 'revoke') {
+        e.revoked = Date.now();
+        for (const v of Object.values(S.sessions)) if (v.enroll === e.id) { v.revoked = true; delete S.push[v.sid]; for (const c of sse) if (c.sid === v.sid) c.res.end(); }
+        saveNow(); pushToDevices({ t: 'sessions', sids: activeSids() }); log('取消授权：' + e.ua);
+      } else if (b.action === 'rename') { e.note = String(b.name || '').slice(0, 40); saveNow(); }
+      return send(res, 200, { ok: true });
     }
     if (p === '/api/admin/invite' && req.method === 'POST') { const b = await body(req); return send(res, 200, { invite: newInvite(b.note || '', Math.min(168, Math.max(1, Number(b.hours) || 24))) }); }
     if (p === '/api/admin/invite/delete' && req.method === 'POST') {

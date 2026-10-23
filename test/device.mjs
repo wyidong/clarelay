@@ -35,7 +35,8 @@ function call(host, p, { method = 'GET', headers = {}, body } = {}) {
   });
 }
 const ORIGIN = 'https://' + DOMAIN + ':' + HP;
-const api = (p, body, cookie) => call(DOMAIN, p, { method: body ? 'POST' : 'GET', headers: { origin: ORIGIN, 'content-type': 'application/json', ...(cookie ? { cookie } : {}) }, body: body ? JSON.stringify(body) : undefined });
+let ENR = '';
+const api = (p, body, cookie) => call(DOMAIN, p, { method: body ? 'POST' : 'GET', headers: { origin: ORIGIN, 'content-type': 'application/json', cookie: [ENR, cookie].filter(Boolean).join('; ') }, body: body ? JSON.stringify(body) : undefined });
 
 // 假的 claclaw
 const seen = [];
@@ -45,13 +46,32 @@ await new Promise(r => app.listen(0, '127.0.0.1', r));
 const APP = 'http://127.0.0.1:' + app.address().port;
 
 console.log('step 1');
+// 0. 没授权的浏览器：一律 404，连登录接口都没有
+assert.equal((await call(DOMAIN, '/')).status, 404);
+assert.equal((await api('/api/login', { user: 'boss', pass: 'super-secret-pass' })).status, 404);
+const enrollUrl = execFileSync(process.execPath, [S, 'enroll', '--data', tmp, '--domain', DOMAIN, '--https-port', HP], { encoding: 'utf8' }).match(/https:\/\/\S+/)[0];
+await sleep(1500);   // 中继合并命令行写入的授权码
+const eu = new URL(enrollUrl);
+const en1 = await call(DOMAIN, eu.pathname + eu.search);
+assert.equal(en1.status, 302);
+ENR = en1.headers['set-cookie'][0].split(';')[0];
+assert.match(ENR, /^__Host-clarelay-dev=/);
+assert.equal((await call(DOMAIN, eu.pathname + eu.search)).status, 404, '授权链接只能用一次');
+assert.equal((await call(DOMAIN, '/', { headers: { cookie: ENR } })).status, 200);
+// 主屏幕 App 授权转移：manifest 的 start_url 带一次性凭证
+const mf = JSON.parse((await call(DOMAIN, '/manifest.webmanifest', { headers: { cookie: ENR } })).text);
+const tr = await call(DOMAIN, mf.start_url);
+assert.equal(tr.status, 302); assert.match(tr.headers['set-cookie'][0], /__Host-clarelay-dev=/);
+assert.equal((await call(DOMAIN, mf.start_url)).status, 404, '转移凭证只能用一次');
+
+console.log('step 1');
 // 1. 登录管理后台
 assert.equal((await api('/api/login', { user: 'boss', pass: 'wrong' })).status, 401);
 const lg = await api('/api/login', { user: 'boss', pass: 'super-secret-pass' });
 assert.equal(lg.status, 200);
 const cookie = lg.headers['set-cookie'][0].split(';')[0];
 assert.match(cookie, /^__Host-clarelay=/);
-assert.equal((await call(DOMAIN, '/api/login', { method: 'POST', headers: { origin: 'https://evil.example', 'content-type': 'application/json' }, body: '{}' })).status, 403, '跨站 POST 被拒');
+assert.equal((await call(DOMAIN, '/api/login', { method: 'POST', headers: { origin: 'https://evil.example', 'content-type': 'application/json', cookie: ENR }, body: '{}' })).status, 403, '跨站 POST 被拒');
 
 console.log('step 2');
 // 2. 生成邀请码，电脑加入（要批准）
@@ -73,9 +93,8 @@ console.log('step 3');
 // 3. 端到端 TLS：证书是电脑自己的（中继不解开）
 const r0 = await call(host, '/', { headers: { accept: 'text/html' } });
 assert.equal(r0.cert.subject.CN, host);
-assert.equal(r0.status, 302);
-assert.match(r0.headers.location, /\/_auth\?host=/);
-assert.equal((await call(host, '/api/x')).status, 401, '没过门卫');
+assert.equal(r0.status, 404, '没过门卫：404');
+assert.equal((await call(host, '/api/x')).status, 404, '没过门卫');
 assert.equal(seen.length, 0, '门卫之前不能碰到应用');
 
 console.log('step 4');
@@ -86,7 +105,7 @@ const a1 = await call(host, tu.pathname + tu.search);
 assert.equal(a1.status, 302); assert.equal(a1.headers.location, '/s/abc?x=1');
 const gate = a1.headers['set-cookie'][0].split(';')[0];
 assert.match(a1.headers['set-cookie'][0], /__Host-clarelay-gate=.*Secure.*HttpOnly.*SameSite=Lax/);
-assert.equal((await call(host, tu.pathname + tu.search)).status, 403, '通行票只能用一次');
+assert.equal((await call(host, tu.pathname + tu.search)).status, 404, '通行票只能用一次');
 const r1 = await call(host, '/s/abc?x=1', { headers: { cookie: gate + '; mine=1', 'x-forwarded-for': '6.6.6.6', 'x-forwarded-proto': 'http' } });
 assert.equal(r1.status, 200); assert.equal(r1.j.hello, 'claclaw');
 assert.equal(r1.headers['x-frame-options'], undefined);
@@ -110,7 +129,7 @@ assert.match(ws, /101 Switching/);
 console.log('step 6');
 // 6. 提醒：摘要只留前 20 个字
 const sse = await new Promise(ok => {
-  const r = https.request({ host: '127.0.0.1', port: HP, servername: DOMAIN, path: '/api/events', ca: CA, headers: { host: DOMAIN, cookie } }, res => { let b = ''; res.on('data', d => { b += d; if (b.includes('"target":"sess-1"')) { r.destroy(); ok(b); } }); });
+  const r = https.request({ host: '127.0.0.1', port: HP, servername: DOMAIN, path: '/api/events', ca: CA, headers: { host: DOMAIN, cookie: ENR + '; ' + cookie } }, res => { let b = ''; res.on('data', d => { b += d; if (b.includes('"target":"sess-1"')) { r.destroy(); ok(b); } }); });
   r.end();
   setTimeout(() => dev.notify({ app: 'claclaw', target: 'sess-1', kind: 'reply', title: '测试 Mac · 会话', snippet: '一二三四五六七八九十一二三四五六七八九十多出来的不该出现', unread: 2 }), 300);
 });
@@ -125,10 +144,16 @@ const sid = (await api('/api/me', null, cookie)).j.sid;
 // 用另一个登录去撤销第一个
 const cookie2 = (await api('/api/login', { user: 'boss', pass: 'super-secret-pass' })).headers['set-cookie'][0].split(';')[0];
 await api('/api/admin/session', { sid, action: 'revoke' }, cookie2);
-await until(async () => (await call(host, '/x', { headers: { cookie: gate } })).status === 401, 3000, 'gate revoked');
+await until(async () => (await call(host, '/x', { headers: { cookie: gate } })).status === 404, 3000, 'gate revoked');
 assert.equal((await api('/api/me', null, cookie)).status, 401);
 
 console.log('step 8');
+// 7b. 取消授权：这台浏览器的登录跟着失效，再打开只有 404
+const st7 = (await api('/api/admin/state', null, cookie2)).j;
+const other = st7.enrolls.find(e => !e.current);
+assert.ok(other, '应有第二个授权（主屏幕 App 转移来的）');
+assert.equal((await api('/api/admin/enrollment', { id: other.id, action: 'revoke' }, cookie2)).status, 200);
+
 // 8. 端口 80：跳转到 https
 const p80 = await new Promise(ok => http.get({ host: '127.0.0.1', port: PP, path: '/a', headers: { host: host } }, r => { r.resume(); ok(r); }));
 assert.equal(p80.statusCode, 301); assert.equal(p80.headers.location, `https://${host}:${HP}/a`);
@@ -139,6 +164,9 @@ await api('/api/admin/device', { id, action: 'revoke' }, cookie2);
 await until(() => dev.status === 'revoked', 3000, 'device revoked');
 await assert.rejects(call(host, '/'));
 
+const mine = st7.enrolls.find(e => e.current);
+await api('/api/admin/enrollment', { id: mine.id, action: 'revoke' }, cookie2);   // 自己也撤：之后全部 404
+assert.equal((await api('/api/me', null, cookie2)).status, 404);
 await dev.stop(); relay.kill(); app.close();
 await sleep(300); try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {}
 console.log('device ok');

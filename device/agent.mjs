@@ -98,16 +98,12 @@ export async function startDevice(o = {}) {
     if (u.pathname === '/_clarelay/auth') {
       const t = verifyTicket(st.gatePub, u.searchParams.get('ticket'));
       const back = String(u.searchParams.get('back') || '/');
-      if (!t || t.aud !== st.label || t.exp < Date.now() || usedTickets.has(t.n) || !sids.has(t.sid)) { res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8', ...frameHeaders }); return res.end('通行票无效或已过期，请回到 clarelay 重新打开'); }
+      if (!t || t.aud !== st.label || t.exp < Date.now() || usedTickets.has(t.n) || !sids.has(t.sid)) { res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', ...frameHeaders }); return res.end('Not Found'); }
       usedTickets.set(t.n, t.exp); for (const [n, e] of usedTickets) if (e < Date.now()) usedTickets.delete(n);
       res.writeHead(302, { location: /^\/(?!\/)/.test(back) ? back : '/', 'set-cookie': `${GATE}=${gateCookie(t.sid)}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=${30 * 86400}`, ...frameHeaders });
       return res.end();
     }
-    if (u.pathname === '/_clarelay/ping') { res.writeHead(200, { 'content-type': 'application/json', ...frameHeaders }); return res.end(JSON.stringify({ ok: true, name: st.name, gate: gateOk(req) })); }
-    if (!gateOk(req)) {
-      if (req.method === 'GET' && /text\/html/.test(req.headers.accept || '')) { res.writeHead(302, { location: SHELL + '/_auth?host=' + st.label + '&back=' + encodeURIComponent(req.url) }); return res.end(); }
-      res.writeHead(401, { 'content-type': 'application/json', ...frameHeaders }); return res.end(JSON.stringify({ ok: false, error: '需要先登录 clarelay' }));
-    }
+    if (!gateOk(req)) { res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', ...frameHeaders }); return res.end('Not Found'); }   // 没过门卫：什么都不给
     proxy(req, res);
   }
   function fwdHeaders(req) {
@@ -130,7 +126,7 @@ export async function startDevice(o = {}) {
   }
   function onUpgrade(req, sock, head) {
     sock.on('error', () => {});
-    if (!gateOk(req)) { sock.end('HTTP/1.1 401 Unauthorized\r\nconnection: close\r\n\r\n'); return; }
+    if (!gateOk(req)) { sock.end('HTTP/1.1 404 Not Found\r\nconnection: close\r\n\r\n'); return; }
     const t = new URL(target), mod = t.protocol === 'https:' ? https : http;
     const h = fwdHeaders(req); h.connection = 'Upgrade'; h.upgrade = req.headers.upgrade;
     const up = mod.request({ host: t.hostname, port: t.port, method: req.method, path: req.url, headers: h, setHost: false });
