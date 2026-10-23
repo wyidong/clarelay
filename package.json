@@ -1,12 +1,32 @@
 {
   "name": "clarelay",
-  "version": "0.2.4",
+  "version": "0.3.0-dev",
   "description": "零依赖的 HTTP 中继 + 隧道：让不在同一个局域网的电脑互相访问（自签证书 + 指纹钉死）",
   "type": "module",
-  "exports": { ".": "./tunnel.mjs" },
-  "bin": { "clarelay-server": "server.mjs", "clarelay-tunnel": "tunnel.mjs" },
-  "files": ["server.mjs", "tunnel.mjs", "README.md", "PROTOCOL.md", "deploy"],
-  "scripts": { "test": "node test/smoke.mjs && node test/e2e.mjs && node test/device.mjs", "start": "node server.mjs" },
-  "engines": { "node": ">=18" },
+  "exports": {
+    ".": "./tunnel.mjs",
+    "./device": "./device/agent.mjs"
+  },
+  "bin": {
+    "clarelay-server": "server.mjs",
+    "clarelay-tunnel": "tunnel.mjs",
+    "clarelay-device-server": "device/server.mjs",
+    "clarelay-device": "device/agent.mjs"
+  },
+  "files": [
+    "PROTOCOL.md",
+    "README.md",
+    "deploy",
+    "device",
+    "server.mjs",
+    "tunnel.mjs"
+  ],
+  "scripts": {
+    "test": "node test/smoke.mjs && node test/e2e.mjs && node test/device.mjs && node test/webpush.mjs",
+    "start": "node server.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
   "license": "MIT"
 }

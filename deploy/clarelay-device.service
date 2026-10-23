@@ -1,0 +1,27 @@
+# clarelay 设备组网中继的 systemd 服务模板（deploy/install-device.sh 会替换 @NODE@ @DOMAIN@ @EXTRA@）
+[Unit]
+Description=clarelay device network relay
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+User=clarelay
+Group=clarelay
+ExecStart=@NODE@ /opt/clarelay/device/server.mjs --domain @DOMAIN@ --data /var/lib/clarelay-device @EXTRA@
+Restart=always
+RestartSec=10
+MemoryMax=300M
+Nice=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/clarelay-device
+# 监听 80 / 443 需要
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
+[Install]
+WantedBy=multi-user.target

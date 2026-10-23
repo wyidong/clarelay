@@ -4,6 +4,7 @@
 //   const dev = await startDevice({ invite, state, name, services: { claclaw: 'http://127.0.0.1:8787' } });
 //
 // 命令行：node device/agent.mjs <设备邀请码> --name 办公室Mac --to http://127.0.0.1:8787 [--state 文件]
+//   测试用：--acme devca --ca 测试CA.pem --connect 127.0.0.1:端口
 import http from 'node:http';
 import https from 'node:https';
 import fs from 'node:fs';
@@ -265,6 +266,7 @@ if (isMain) {
   const ts = () => new Date().toISOString().slice(11, 19);
   try {
     const dev = await startDevice({ invite, name: arg('name'), state: arg('state'), services: { [arg('app') || 'claclaw']: to }, acme: arg('acme'),
+      ca: arg('ca') ? fs.readFileSync(arg('ca'), 'utf8') : undefined, connect: arg('connect') ? { host: arg('connect').split(':')[0], port: Number(arg('connect').split(':')[1]) } : undefined,
       log: (...a) => console.log(ts(), ...a), onStatus: s => console.log(ts(), '状态：', s.online ? '在线' : '离线', s.status, s.cert?.ok ? '证书正常' : '证书未就绪', s.error || '') });
     console.log('本机网址：' + dev.url + '\n手机打开：' + dev.shellUrl);
     process.on('SIGINT', () => dev.stop().then(() => process.exit(0)));
