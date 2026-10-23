@@ -13,10 +13,11 @@
 //   - 领地址要「注册口令」（启动时生成、打印），陌生人领不到地址。
 //   - 地址里的名字是随机长串，相当于钥匙：只有拿到地址的人才能访问；访问之后还要过本地服务自己的验证（比如 claclaw 的配对钥匙）。
 //
-// 运行：node server.mjs --public https://服务器IP:8790 [--port 8790] [--data 目录] [--plain]
+// 运行：node server.mjs --public https://服务器IP:8790 [--port 8790] [--data 目录] [--plain] [--print]
 //   --public 外网访问这台中继用的地址（写进「中继邀请码」；不填就猜本机网卡 IP）
 //   --data   放证书、口令、已登记名字的目录（默认和本文件同目录下的 relay-data/）
 //   --plain  不用 HTTPS（只在测试时用）
+//   --print  只打印地址、指纹和邀请码，然后退出（不启动服务）
 // 启动时打印「中继邀请码」= 地址 + 证书指纹 + 注册口令，交给 tunnel.mjs / startTunnel() 就能接入。
 import http from 'node:http';
 import https from 'node:https';
@@ -34,7 +35,7 @@ const PLAIN = process.argv.includes('--plain');
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const DIR = path.resolve(arg('data', path.join(HERE, 'relay-data')));
 const TUNNEL_SRC = fs.readFileSync(path.join(HERE, 'tunnel.mjs'));   // 公开提供下载：同事不用装任何东西
-const MAX_BODY = 1024 * 1024;              // 单个请求 / 响应最多 1MB
+const MAX_BODY = 3 * 1024 * 1024;          // 单个请求 / 响应最多 3MB（端到端加密后体积会变大，内容实际约 1MB）
 const REQ_TIMEOUT = 11 * 60 * 1000;        // 等本地服务回应最多 11 分钟（claclaw 协同一轮最多 10 分钟）
 const POLL_WAIT = 25 * 1000;               // 隧道一次长轮询等多久
 const ONLINE_GRACE = 60 * 1000;            // 隧道这么久没来取请求就算离线
@@ -150,7 +151,7 @@ async function handler(req, res) {
     if (limited(ipOf(req))) return send(res, 429, { error: '请求太频繁' });
     const t = tunnelOf(m[1]);
     if (Date.now() - t.lastPoll > ONLINE_GRACE) return send(res, 502, { ok: false, error: '对方不在线（隧道没连着中继）' });
-    let body; try { body = await readBody(req); } catch { return send(res, 413, { error: '请求太大（最多 1MB）' }); }
+    let body; try { body = await readBody(req); } catch { return send(res, 413, { error: '请求太大（最多 3MB）' }); }
     const id = crypto.randomBytes(9).toString('base64url');
     const headers = {};
     for (const [k, v] of Object.entries(req.headers)) if (!/^(host|connection|transfer-encoding|content-length|keep-alive|x-forwarded-for)$/i.test(k)) headers[k] = v;
@@ -170,6 +171,10 @@ function guessPublic() {
   return '<服务器IP>';
 }
 const PUBLIC = String(arg('public', '') || (PLAIN ? 'http' : 'https') + '://' + guessPublic() + ':' + PORT).replace(/\/+$/, '');
+if (process.argv.includes('--print')) {   // 只打印邀请码就退出（服务已在跑时找回邀请码）
+  console.log('地址：' + PUBLIC + '\n证书指纹（pin）：' + (pin || '（--plain，无）') + '\n中继邀请码：\n' + makeInvite({ relay: PUBLIC, pin, key: state.key }));
+  process.exit(0);
+}
 srv.listen(PORT, () => {
   console.log('clarelay ' + VERSION + ' 中继已启动：' + PUBLIC + (arg('public') ? '' : '（猜的地址；云服务器请用 --public https://公网IP:' + PORT + ' 指定）'));
   if (pin) console.log('证书指纹（pin）：' + pin);

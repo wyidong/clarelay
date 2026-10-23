@@ -1,0 +1,29 @@
+# clarelay 中继的 systemd 服务模板（deploy/install.sh 会替换 @NODE@ @PUBLIC@ @PORT@）
+[Unit]
+Description=clarelay relay
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+User=clarelay
+Group=clarelay
+ExecStart=@NODE@ /opt/clarelay/server.mjs --data /var/lib/clarelay --public @PUBLIC@ --port @PORT@
+Restart=always
+RestartSec=10
+# 资源：中继很轻（几十 MB），和别的服务同机时限制住，内存紧张时让它先被结束
+MemoryMax=150M
+OOMScoreAdjust=500
+Nice=10
+# 加固：只能写自己的数据目录
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/clarelay
+# 端口小于 1024（例如 443）时需要这一行
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+
+[Install]
+WantedBy=multi-user.target

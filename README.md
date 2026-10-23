@@ -1,110 +1,183 @@
-# clarelay：让不在同一个局域网的电脑互相访问
+# clarelay：在自己的服务器上搭一个私有中继，让不在同一个局域网的电脑互相访问
 
-零依赖（只要 Node.js 18+），两个文件：
+用 clarelay 可以在自己的服务器上搭一个只有你和你信任的人能用的中继，效果类似 ngrok，但不经过任何第三方服务。家里、公司的电脑都不用开端口，只需要一台外网能访问的服务器开放**一个端口**。不需要域名，也不需要申请证书。
+
+- **零依赖**：只要 Node.js 18 以上，不用 `npm install`。
+- **私有**：拿到「中继邀请码」的人才能接入；它不是开放代理，只能访问已经接入的电脑。
+- **端到端加密**：请求在发起方加密、在目标电脑上解密，中继只转发密文。
+- 由两个文件组成：
 
 | 文件 | 跑在哪 | 干什么 |
 | --- | --- | --- |
-| `server.mjs` | 一台外网能访问的服务器（开一个端口，不需要域名和证书） | 中转请求 |
-| `tunnel.mjs` | 每台要被别人访问的电脑 | 主动连中继，领一个公开地址，把请求转给本机服务。也可以 `import` |
+| `server.mjs` | 你的服务器（中继） | 中转请求 |
+| `tunnel.mjs` | 每台要被别人访问的电脑 | 主动连上中继、领一个公开地址，把收到的请求转给本机服务；也可以在代码里 `import` |
 
 ```
-别人 ── https://中继:8790/t/<名字>/路径 ──▶ server.mjs ◀── 一直连着 ── tunnel.mjs ──▶ 本机服务/路径
+发起方 ──(加密)── https://中继:8790/t/<名字>/_e2e ──▶ server.mjs ◀── 一直连着 ── tunnel.mjs ──(解密)──▶ 本机服务
 ```
 
-## 1. 服务器：运行中继
+---
+
+## 一、在自己的服务器上部署中继
+
+### 1. 准备
+
+- 一台外网能访问的 Linux 服务器（任意云厂商、VPS 都行），内存 100MB 左右就够。
+- Node.js 18 以上，以及 `openssl`（大多数系统自带）。检查：`node -v`、`openssl version`。
+- 没有 Node 时可以这样装（任选一种）：
+  - Debian / Ubuntu：`curl -fsSL https://deb.nodesource.com/setup_22.x | sudo bash - && sudo apt install -y nodejs`
+  - CentOS / Alibaba Cloud Linux / RHEL：`curl -fsSL https://rpm.nodesource.com/setup_22.x | sudo bash - && sudo yum install -y nodejs`
+  - 也可以到 https://nodejs.org 下载二进制包。
+
+### 2. 安装（推荐：一键脚本，系统用 systemd）
 
 ```sh
-git clone https://github.com/wyidong/clarelay.git && cd clarelay
-node server.mjs --public https://服务器公网IP:8790 --port 8790
+git clone https://github.com/wyidong/clarelay.git
+cd clarelay
+sudo sh deploy/install.sh https://<服务器公网IP或域名>:8790
 ```
 
-第一次启动生成自签证书和注册口令（存 `relay-data/`，重启不变），打印：
+脚本会做这些事：
+
+1. 新建系统用户 `clarelay`，以普通权限运行。
+2. 把程序复制到 `/opt/clarelay`，数据放在 `/var/lib/clarelay`。
+3. 安装 `clarelay.service`：开机自启，崩溃后 10 秒重启，限制内存，加固了文件系统权限。
+4. 打印**中继邀请码**。
 
 ```
-clarelay 0.1.0 中继已启动：https://服务器公网IP:8790
+已启动：https://<服务器公网IP>:8790
+地址：https://<服务器公网IP>:8790
 证书指纹（pin）：sha256//…
-注册口令：…
-中继邀请码（只给要接入的人，内含注册口令）：
+中继邀请码：
 clarelay1.eyJy…
 ```
 
-**中继邀请码**＝地址＋证书指纹＋注册口令。拿到它就能接入，只给信任的人。
-防火墙放行端口（`ufw allow 8790/tcp` 或云安全组）。
+> **注意**：`--public` 要写**别人从外网访问时用的地址**。云服务器的网卡上通常只有内网 IP，所以一定要手动写公网 IP 或域名。
 
-systemd 开机自启：
+### 3. 放行端口
 
-```ini
-# /etc/systemd/system/clarelay.service
-[Unit]
-Description=clarelay
-After=network-online.target
-[Service]
-User=用户
-WorkingDirectory=/home/用户/clarelay
-ExecStart=/usr/bin/node /home/用户/clarelay/server.mjs --public https://服务器公网IP:8790 --port 8790
-Restart=always
-[Install]
-WantedBy=multi-user.target
-```
+中继要能从外网访问，需要放行 **TCP 8790**（或你选的端口）：
 
-`sudo systemctl enable --now clarelay`；`journalctl -u clarelay -n 20` 看邀请码。
+- **云服务器**：在控制台的「安全组 / 防火墙规则」里加一条入方向规则：TCP 8790，来源 0.0.0.0/0。
+- **服务器自己的防火墙**（如果开着）：`sudo ufw allow 8790/tcp`，或者 `sudo firewall-cmd --add-port=8790/tcp --permanent && sudo firewall-cmd --reload`。
 
-## 2. 自己电脑：连隧道
+在自己电脑上检查能不能连上（把指纹换成上一步打印的）：
 
 ```sh
-node tunnel.mjs <中继邀请码> --to http://127.0.0.1:8788
+curl -k --pinnedpubkey 'sha256//…' https://<服务器公网IP>:8790/_relay/version
+# {"ok":true,"name":"clarelay","version":"…"}
 ```
 
-打印公开地址和带指纹的地址（`…/t/<名字>#pin=sha256//…`）。名字存在 `~/.relay-tunnel.json`（`--state` 可改），重启后不变。
+### 4. 日常管理
 
-**不装任何东西的写法**（给同事的 AI 照着跑）——中继自己提供 `tunnel.mjs` 下载，先核对指纹：
+| 要做什么 | 命令 |
+| --- | --- |
+| 看状态 / 日志 | `systemctl status clarelay`、`journalctl -u clarelay -n 50` |
+| 重新查看邀请码 | `sudo -u clarelay node /opt/clarelay/server.mjs --data /var/lib/clarelay --public https://<地址>:8790 --print` |
+| 升级 | `cd clarelay && git pull && sudo sh deploy/install.sh https://<地址>:8790`（证书、口令、已接入的隧道都保留） |
+| 停止 / 启动 | `sudo systemctl stop clarelay` / `sudo systemctl start clarelay` |
+| **换掉证书和口令**（邀请码泄露时） | `sudo systemctl stop clarelay && sudo rm -rf /var/lib/clarelay/* && sudo systemctl start clarelay`，之后重新查看邀请码。旧邀请码、旧地址全部作废，所有人都要用新邀请码重新接入 |
+| 卸载 | `sudo systemctl disable --now clarelay && sudo rm -rf /etc/systemd/system/clarelay.service /opt/clarelay /var/lib/clarelay && sudo userdel clarelay`，再在安全组里关掉端口 |
+
+### 不用 systemd 的手动运行方式
+
+可以先用这种方式临时试一下：
 
 ```sh
-curl -fsSk --pinnedpubkey 'sha256//…' https://中继:8790/tunnel.mjs -o clarelay-tunnel.mjs \
+node server.mjs --public https://<服务器公网IP>:8790 --port 8790          # 数据放在 ./relay-data/
+```
+
+参数：`--public` 是对外地址；`--port` 是监听端口（默认 8790）；`--data` 是数据目录；`--print` 只打印邀请码然后退出；`--plain` 不用 HTTPS，只能在测试时用。
+
+---
+
+## 二、让一台电脑通过中继被访问（隧道）
+
+把中继邀请码交给要接入的人。在他的电脑上运行：
+
+```sh
+node tunnel.mjs '<中继邀请码>' --to http://127.0.0.1:8788
+```
+
+运行后会打印一个**地址**，要整段复制，包括 `#` 后面的部分：
+
+```
+https://<中继>:8790/t/<名字>#pin=sha256//…&key=…
+```
+
+- `#pin=` 是中继的证书指纹，`#key=` 是这台电脑的端到端加密公钥。把这个地址交给要访问你的人，他发请求时会自动核对证书指纹，并自动加密。
+- 名字和密钥都存在 `~/.relay-tunnel.json`（可以用 `--state` 换位置），重启后地址不变。
+- 默认**只接受端到端加密的请求**。加上 `--plain` 也会接受不加密的请求（比如用 curl 调试时）。
+
+**对方什么都不用装的写法**：中继自己提供 `tunnel.mjs` 下载，下载时会先核对指纹。
+
+```sh
+curl -fsSk --pinnedpubkey 'sha256//…' https://<中继>:8790/tunnel.mjs -o clarelay-tunnel.mjs \
   && node clarelay-tunnel.mjs '<中继邀请码>' --to http://127.0.0.1:8788
 ```
 
-这条命令可以用 `tunnelCommand(invite, to)` 生成。
+这条命令可以用 `tunnelCommand(invite, to)` 生成，直接复制给对方（或者对方的 AI）运行即可。
 
-## 3. 在代码里用
+---
+
+## 三、在代码里使用
 
 ```js
-import { startTunnel, parseInvite, makeInvite, isInvite, tunnelCommand, pinnedConnector, pinOf, VERSION } from 'clarelay';
+import { startTunnel, relayRequest, parseInvite, isInvite, makeInvite, tunnelCommand, parseAddress, pinnedConnector, VERSION } from 'clarelay';
 
+// 被访问的一方：连隧道
 const t = await startTunnel({
-  invite,                          // 或 { relay, pin, key }
+  invite,                          // 中继邀请码（也可以分开传 { relay, pin, key }）
   to: 'http://127.0.0.1:8788',     // 本机服务
   state: '/path/state.json',       // 可选，默认 ~/.relay-tunnel.json
-  onStatus: s => {},               // 可选，{ online, error? } 断线 / 重连时调用
+  plain: false,                    // 可选，true 时也接受不加密的请求
+  onStatus: s => {},               // 可选，{ online, error? }，断线 / 重连时调用
   log: console.log,                // 可选
 });
-t.publicUrl   // https://中继:8790/t/<名字>
-t.pin         // sha256//…（http 中继时为空）
-t.online      // 当前是否连着
+t.address                    // https://中继/t/<名字>#pin=…&key=…  ← 交给访问方
+t.urlFor('/claclaw-peer')    // https://中继/t/<名字>/claclaw-peer#pin=…&key=…
+t.publicUrl / t.pin / t.key / t.online
 await t.stop();
+
+// 访问的一方：发请求（自动核对 #pin、自动按 #key 加解密）
+const r = await relayRequest(address, { method: 'POST', headers: {}, body: { hello: 1 }, timeout: 60e3 });
+r.status; r.headers; r.body /* Buffer */; r.text(); r.json(); r.e2e /* 是否经过端到端解密 */
 ```
 
-- 邀请码错、口令错、指纹不对、中继连不上：`startTunnel` 直接 reject，不重试；连上之后断线会每 5 秒自动重连。
-- 访问中继时自己核对指纹：`https.request(url, { createConnection: pinnedConnector(pin) })`（别加 `agent: false`，否则 Node 会忽略 `createConnection`）。
-- 经隧道进来的请求带 `x-forwarded-for`＝真实来源 IP（中继会覆盖对方伪造的值）。
+- `startTunnel`：邀请码错、口令错、指纹不对、连不上中继时直接 reject，不会重试；连上之后如果断线，每 5 秒自动重连。
+- `relayRequest`：中继自己返回的错误（对方不在线 502、超时 504、限流 429）会以明文返回，此时 `e2e=false`。**如果收到的是明文的成功响应，一律当作被篡改，直接 reject。**
+- 本机服务收到的请求带 `x-forwarded-for`，值是中继看到的来源 IP（这个值由中继提供，见下文）。
+- 自己用 `pinnedConnector(pin)` 发 https 请求时，不要加 `agent: false`，否则 Node 会忽略 `createConnection`，指纹就不核对了。
 
-## 4. 别人怎么访问
+---
 
-```sh
-curl -k --pinnedpubkey 'sha256//…' https://中继:8790/t/<名字>/路径
-```
+## 四、安全
 
-## 安全和限制
+**中继能看到什么**
 
-- 传输是 HTTPS，证书指纹钉死：网络上的中间人看不到内容，也冒充不了中继。
-- **中继能看到经过它的全部内容**：TLS 在中继这里终止，请求和响应在中继上是明文（转发需要）。中继只放在你信任的服务器上；目前没有端到端加密。
-- 公开地址里的名字是 20 位随机串，等于钥匙；之后还要过本机服务自己的验证。
-- 注册口令错误的请求、公开地址的请求：每个来源 IP 每分钟最多 120 次。
-- 单个请求 / 响应最多 1MB；最多等 11 分钟回应；隧道 60 秒没来取请求就算离线（返回 502「对方不在线」）。
-- `--plain`：不用 HTTPS，只用于测试。
+| | 中继能看到 | 中继能做到 |
+| --- | --- | --- |
+| 请求 / 响应内容、路径、请求头 | ❌ 看不到（AES-256-GCM 加密） | ❌ 改不了（改了对方会解密失败） |
+| 隧道名字、数据大小、时间、来源 IP | ✅ 看得到 | 可以谎报来源 IP |
+| 重放捕获到的请求 | — | ❌ 不行（目标电脑会拒绝重复的请求和 5 分钟以前的请求） |
+| 丢弃请求、不转发 | — | ✅ 可以（这只影响能不能连上，泄露不了内容） |
+
+**加密方式**：每台隧道电脑有一把长期的 X25519 密钥，公钥放在地址的 `#key=` 里。发起方每发一个请求都临时生成一把新密钥，用 ECDH 加上 HKDF-SHA256 算出请求和响应各自的密钥，再用 AES-256-GCM 加密。方法、路径、请求头、请求体都在密文里。
+
+**前提**：地址（含 `#key=`）要通过可信的渠道交给对方，比如自己复制粘贴发给同事。拿到地址的方式可信，加密才可信。
+
+**其他**
+
+- 中继和隧道之间用 HTTPS，证书指纹钉死（自签证书，换了证书就拒绝连接），所以注册口令不会被别人截走。
+- 只有拿到邀请码的人才能领地址。邀请码里包含注册口令，只发给你信任的人；泄露了就按上面的方法换掉。
+- 公开地址里的名字是 20 位随机串；就算知道了名字，没有 `#key=` 也只能发出对方解不开的请求。
+- 限制：注册口令错误的请求和公开地址的请求，每个来源 IP 每分钟最多 120 次。单个请求或响应的内容最多约 1MB。对方最多等 11 分钟回应。隧道 60 秒没连着中继就算离线。
+
+---
 
 ## 测试
 
 ```sh
-npm test   # 本机起中继 + 隧道 + 假服务，跑通转发、指纹、口令、重启地址不变
+npm test   # 在本机起中继、隧道和一个假服务，测转发、指纹、口令、重启后地址不变，
+           # 以及加密（模拟一个恶意中继：偷看、重放、篡改都要失败）
 ```

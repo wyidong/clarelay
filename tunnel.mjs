@@ -18,7 +18,7 @@ import crypto from 'node:crypto';
 import tls from 'node:tls';
 import { fileURLToPath } from 'node:url';
 
-export const VERSION = '0.1.0';
+export const VERSION = '0.2.0';
 const INVITE_PREFIX = 'clarelay1.';
 const MAX_BODY = 1024 * 1024;
 
@@ -62,6 +62,89 @@ export function pinnedConnector(pin) {
   };
 }
 
+// ---------- 端到端加密 ----------
+// 隧道有一把长期的 X25519 密钥，公钥放在地址的 #key= 里（和 #pin= 一样随地址带外传递，中继改不了）。
+// 每个请求：发起方临时生成 X25519 密钥 → ECDH → HKDF-SHA256 得到请求、响应两把 AES-256-GCM 密钥，
+// 把 {方法, 路径, 头, 体, 时间} 整个加密后 POST 到 /t/<名字>/_e2e；隧道解密、转给本机服务，再把响应加密送回。
+// 中继只能看到：名字、密文大小、时间、来源 IP。重放：隧道拒绝 5 分钟外的请求和重复的临时公钥。
+export const E2E_PATH = '/_e2e';
+export const E2E_TYPE = 'application/x-clarelay-e2e';
+const E2E_SKEW = 5 * 60e3, E2E_INFO = 'clarelay e2e v1';
+const rawPub = k => k.export({ format: 'jwk' }).x;
+const pubFromRaw = x => crypto.createPublicKey({ key: { kty: 'OKP', crv: 'X25519', x }, format: 'jwk' });
+function e2eDerive(privateKey, peerRaw, ephRaw, tunRaw) {
+  const shared = crypto.diffieHellman({ privateKey, publicKey: pubFromRaw(peerRaw) });
+  const salt = Buffer.concat([Buffer.from(ephRaw, 'base64url'), Buffer.from(tunRaw, 'base64url')]);
+  const k = Buffer.from(crypto.hkdfSync('sha256', shared, salt, E2E_INFO, 64));
+  return { req: k.subarray(0, 32), res: k.subarray(32) };
+}
+function seal(key, obj) {
+  const iv = crypto.randomBytes(12), c = crypto.createCipheriv('aes-256-gcm', key, iv);
+  const ct = Buffer.concat([c.update(JSON.stringify(obj)), c.final()]);
+  return Buffer.concat([iv, ct, c.getAuthTag()]);
+}
+function unseal(key, buf) {
+  const d = crypto.createDecipheriv('aes-256-gcm', key, buf.subarray(0, 12));
+  d.setAuthTag(buf.subarray(buf.length - 16));
+  return JSON.parse(Buffer.concat([d.update(buf.subarray(12, buf.length - 16)), d.final()]).toString('utf8'));
+}
+// 地址：https://中继/t/<名字>/路径#pin=sha256//…&key=…（pin 里有 + / =，不能用 URLSearchParams 解析）
+export function parseAddress(address) {
+  const u = new URL(address), frag = {};
+  for (const kv of u.hash.slice(1).split('&')) { const i = kv.indexOf('='); if (i > 0) frag[kv.slice(0, i)] = decodeURIComponent(kv.slice(i + 1)); }
+  u.hash = '';
+  return { url: u.toString(), pin: frag.pin || '', key: frag.key || '' };
+}
+
+/**
+ * 发请求到中继上的地址：自动核对 #pin=，地址带 #key= 时自动端到端加密。
+ * @returns {Promise<{status:number, headers:object, body:Buffer, e2e:boolean, text:()=>string, json:()=>any}>}
+ *   端到端模式下，中继自己回的错误（对方不在线 502、超时 504 等）以明文原样返回，e2e=false；
+ *   明文的成功响应一律当作被篡改，直接 reject。
+ */
+export function relayRequest(address, { method = 'GET', headers = {}, body, timeout = 11 * 60e3 } = {}) {
+  const { url, pin, key } = parseAddress(address);
+  const u = new URL(url);
+  let send = body == null ? Buffer.alloc(0) : Buffer.isBuffer(body) ? body : Buffer.from(typeof body === 'string' ? body : JSON.stringify(body));
+  let reqHeaders = { ...headers }, reqMethod = method, target = u, keys = null;
+  if (key) {
+    const m = u.pathname.match(/^(\/t\/[A-Za-z0-9_-]{16,64})(\/.*)?$/);
+    if (!m) return Promise.reject(new Error('带 #key= 的地址要是 https://中继/t/<名字>/… 的形式'));
+    const eph = crypto.generateKeyPairSync('x25519'), ephRaw = rawPub(eph.publicKey);
+    try { keys = e2eDerive(eph.privateKey, key, ephRaw, key); } catch { return Promise.reject(new Error('地址里的 #key= 无效')); }
+    const lower = Object.fromEntries(Object.entries(headers).map(([k, v]) => [k.toLowerCase(), v]));
+    if (send.length && !lower['content-type'] && !Buffer.isBuffer(body) && typeof body !== 'string') lower['content-type'] = 'application/json';
+    const inner = { t: Date.now(), m: method, p: (m[2] || '/') + u.search, h: lower, b: send.toString('base64') };
+    send = Buffer.concat([Buffer.from([1]), Buffer.from(ephRaw, 'base64url'), seal(keys.req, inner)]);
+    reqMethod = 'POST'; reqHeaders = { 'content-type': E2E_TYPE };
+    target = new URL(u.origin + m[1] + E2E_PATH);
+  }
+  const mod = target.protocol === 'https:' ? https : http;
+  return new Promise((ok, bad) => {
+    const req = mod.request(target, {
+      method: reqMethod, timeout, headers: { ...reqHeaders, 'content-length': send.length },
+      ...(target.protocol === 'https:' && pin ? { createConnection: pinnedConnector(pin) } : {}),
+    }, res => {
+      const chunks = []; res.on('data', c => chunks.push(c));
+      res.on('end', () => {
+        let out = { status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks), e2e: false };
+        if (keys) {
+          if (String(res.headers['content-type'] || '').startsWith(E2E_TYPE)) {
+            try { const r = unseal(keys.res, out.body); out = { status: r.s, headers: r.h || {}, body: Buffer.from(r.b || '', 'base64'), e2e: true }; }
+            catch { return bad(new Error('端到端解密失败：响应被篡改或对方密钥不对')); }
+          } else if (res.statusCode < 400) return bad(new Error('对方返回了未加密的响应，拒绝（可能被中继篡改）'));
+        }
+        out.text = () => out.body.toString('utf8');
+        out.json = () => JSON.parse(out.body.toString('utf8'));
+        ok(out);
+      });
+    });
+    req.on('timeout', () => req.destroy(new Error('timeout')));
+    req.on('error', bad);
+    req.end(send);
+  });
+}
+
 const defaultState = () => path.join(os.homedir(), '.relay-tunnel.json');
 
 /**
@@ -71,9 +154,11 @@ const defaultState = () => path.join(os.homedir(), '.relay-tunnel.json');
  * @param {string} o.to         本机服务地址，例如 http://127.0.0.1:8788
  * @param {string} [o.state]    记名字和隧道密钥的文件（默认 ~/.relay-tunnel.json），重启后公开地址不变
  * @param {number} [o.pollers]  同时等几个请求（默认 4）
+ * @param {boolean} [o.plain]   也接受不加密的请求（默认 false：只接受端到端加密的请求）
  * @param {(s:{online:boolean,error?:string})=>void} [o.onStatus]  在线状态变化
  * @param {(...a)=>void} [o.log]
- * @returns {Promise<{publicUrl:string, relay:string, pin:string, name:string, stop:()=>Promise<void>}>}
+ * @returns {Promise<{publicUrl:string, address:string, urlFor:(p:string)=>string, relay:string, pin:string, key:string, name:string, online:boolean, stop:()=>Promise<void>}>}
+ *   address = publicUrl#pin=…&key=…；urlFor('/claclaw-peer') = publicUrl/claclaw-peer#pin=…&key=…
  *   连不上 / 口令不对 / 指纹不对时 reject（不会自动重试）；连上之后断线会自己重连。
  */
 export async function startTunnel(o = {}) {
@@ -93,7 +178,16 @@ export async function startTunnel(o = {}) {
     fs.mkdirSync(path.dirname(STATE), { recursive: true });
     fs.writeFileSync(STATE, JSON.stringify(st, null, 2), { mode: 0o600 });
   }
+  if (!st[RELAY].e2e) {   // 端到端加密的长期密钥（老的状态文件补上）
+    const kp = crypto.generateKeyPairSync('x25519');
+    st[RELAY].e2e = { priv: kp.privateKey.export({ type: 'pkcs8', format: 'der' }).toString('base64'), pub: rawPub(kp.publicKey) };
+    fs.mkdirSync(path.dirname(STATE), { recursive: true });
+    fs.writeFileSync(STATE, JSON.stringify(st, null, 2), { mode: 0o600 });
+  }
   const { name, secret } = st[RELAY];
+  const E2E_PRIV = crypto.createPrivateKey({ key: Buffer.from(st[RELAY].e2e.priv, 'base64'), format: 'der', type: 'pkcs8' });
+  const E2E_PUB = st[RELAY].e2e.pub;
+  const seen = new Map();   // 用过的临时公钥 → 时间（防重放）
 
   let stopped = false;
   const live = new Set();   // 进行中的请求，stop() 时全部掐断
@@ -136,6 +230,30 @@ export async function startTunnel(o = {}) {
     });
   }
 
+  const plainFail = (status, msg) => ({ status, headers: { 'content-type': 'application/json' }, body: Buffer.from(JSON.stringify({ ok: false, error: msg })).toString('base64') });
+  async function serve(job) {
+    if (job.path.split('?')[0] !== E2E_PATH) return o.plain ? local(job) : plainFail(403, '这个地址只接受端到端加密的请求（地址要带 #key=）');
+    const buf = Buffer.from(job.body || '', 'base64');
+    if (job.method !== 'POST' || buf.length < 1 + 32 + 12 + 16 || buf[0] !== 1) return plainFail(400, '加密请求格式不对');
+    const ephRaw = buf.subarray(1, 33).toString('base64url');
+    let inner, keys;
+    try { keys = e2eDerive(E2E_PRIV, ephRaw, ephRaw, E2E_PUB); inner = unseal(keys.req, buf.subarray(33)); }
+    catch { return plainFail(400, '解密失败（地址里的 #key= 不对？）'); }
+    const now = Date.now();
+    for (const [k, t] of seen) if (now - t > 2 * E2E_SKEW) seen.delete(k);
+    if (Math.abs(now - Number(inner.t)) > E2E_SKEW) return plainFail(400, '请求时间和本机相差超过 5 分钟（检查两边的系统时间）');
+    if (seen.has(ephRaw)) return plainFail(400, '重复的请求（重放），拒绝');
+    seen.set(ephRaw, now);
+    if (typeof inner.p !== 'string' || !inner.p.startsWith('/')) return plainFail(400, '加密请求格式不对');
+    const h = {};
+    for (const [k, v] of Object.entries(inner.h || {})) if (!/^(host|connection|transfer-encoding|content-length|keep-alive|x-forwarded-for)$/i.test(k)) h[k] = v;
+    if (job.headers['x-forwarded-for']) h['x-forwarded-for'] = job.headers['x-forwarded-for'];   // 来源 IP 是中继给的（中继可以撒谎）
+    const res = await local({ method: String(inner.m || 'GET'), path: inner.p, headers: h, body: inner.b || '' });
+    const rh = {};
+    for (const [k, v] of Object.entries(res.headers || {})) if (!/^(connection|transfer-encoding|content-length|keep-alive)$/i.test(k)) rh[k] = v;
+    return { status: 200, headers: { 'content-type': E2E_TYPE }, body: seal(keys.res, { s: res.status, h: rh, b: res.body }).toString('base64') };
+  }
+
   const q = '?name=' + encodeURIComponent(name);
   const r = await relayCall('POST', '/_relay/register' + q, {}, 15e3);
   if (r.status !== 200) throw new Error('登记失败：' + (r.j?.error || 'HTTP ' + r.status));
@@ -149,7 +267,7 @@ export async function startTunnel(o = {}) {
         const r = await relayCall('GET', '/_relay/poll' + q, null, 40e3);
         if (r.status === 200 && r.j?.id) {
           setOnline(true);
-          const out = await local(r.j);
+          const out = await serve(r.j);
           await relayCall('POST', '/_relay/reply' + q + '&id=' + encodeURIComponent(r.j.id), out, 30e3).catch(e => log('交回响应失败', e.message));
         } else if (r.status === 204) setOnline(true);
         else { log('中继返回', r.status, r.j?.error || ''); setOnline(false, r.j?.error || 'HTTP ' + r.status); await sleep(5000); }
@@ -162,7 +280,9 @@ export async function startTunnel(o = {}) {
   const loops = Array.from({ length: o.pollers || 4 }, poller);
 
   return {
-    publicUrl: RELAY + r.j.path, relay: RELAY, pin: PIN, name,
+    publicUrl: RELAY + r.j.path, relay: RELAY, pin: PIN, key: E2E_PUB, name,
+    urlFor: (p = '') => RELAY + r.j.path + p + '#' + (PIN ? 'pin=' + PIN + '&' : '') + 'key=' + E2E_PUB,
+    get address() { return this.urlFor(''); },
     get online() { return online; },
     async stop() { stopped = true; for (const req of live) req.destroy(); live.clear(); await Promise.allSettled(loops); },
   };
@@ -176,17 +296,18 @@ if (isMain) {
   const invite = argv.find(a => a.includes(INVITE_PREFIX)) || arg('invite');
   const ts = () => new Date().toISOString().slice(11, 19);
   if ((!invite && !arg('relay')) || !arg('to')) {
-    console.log('clarelay 隧道 ' + VERSION + '\n用法：node tunnel.mjs <中继邀请码> --to http://127.0.0.1:端口 [--state 文件]');
+    console.log('clarelay 隧道 ' + VERSION + '\n用法：node tunnel.mjs <中继邀请码> --to http://127.0.0.1:端口 [--state 文件] [--plain]');
     process.exit(1);
   }
   try {
     const t = await startTunnel({
-      invite, relay: arg('relay'), pin: arg('pin'), key: arg('key'), to: arg('to'), state: arg('state'),
+      invite, relay: arg('relay'), pin: arg('pin'), key: arg('key'), to: arg('to'), state: arg('state'), plain: argv.includes('--plain'),
       log: (...a) => console.log(ts(), ...a),
       onStatus: s => console.log(ts(), s.online ? '已重新连上中继' : '和中继断开：' + s.error),
     });
     console.log('隧道已连上。公开地址：' + t.publicUrl + '  →  转给 ' + arg('to'));
-    if (t.pin) console.log('证书指纹（pin）：' + t.pin + '\n带指纹的地址：' + t.publicUrl + '#pin=' + t.pin);
+    console.log('把这个地址给要访问你的人（带证书指纹和端到端加密公钥，整段复制）：\n' + t.address);
+    if (argv.includes('--plain')) console.log('注意：--plain 也接受不加密的请求');
     const bye = () => t.stop().then(() => process.exit(0));
     process.on('SIGINT', bye); process.on('SIGTERM', bye);
   } catch (e) { console.log(e.message); process.exit(1); }
