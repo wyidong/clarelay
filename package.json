@@ -6,7 +6,7 @@
   "exports": { ".": "./tunnel.mjs" },
   "bin": { "clarelay-server": "server.mjs", "clarelay-tunnel": "tunnel.mjs" },
   "files": ["server.mjs", "tunnel.mjs", "README.md", "PROTOCOL.md", "deploy"],
-  "scripts": { "test": "node test/smoke.mjs && node test/e2e.mjs", "start": "node server.mjs" },
+  "scripts": { "test": "node test/smoke.mjs && node test/e2e.mjs && node test/device.mjs", "start": "node server.mjs" },
   "engines": { "node": ">=18" },
   "license": "MIT"
 }
