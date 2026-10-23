@@ -55,6 +55,12 @@ clarelay1.eyJy…
 
 > **注意**：`--public` 要写**别人从外网访问时用的地址**。云服务器的网卡上通常只有内网 IP，所以一定要手动写公网 IP 或域名。
 
+**老系统注意**（如 CentOS 7）：
+- 默认 `node` 太旧、新版装在别处时，用 `NODE=/路径/bin/node sudo -E sh deploy/install.sh …` 指定。脚本也会自己去 `/usr/local`、`/opt`、`/opt/rh` 下找。
+- systemd 低于 232 时，`MemoryMax`、`ProtectSystem=strict` 等新写法会被**静默忽略**，服务照常启动，但这些加固其实没生效。脚本会自动加一份老写法的兼容配置（`MemoryLimit`、`ProtectSystem=full`）。
+- 证书用 `openssl ecparam` 生成命名曲线 P-256，openssl 1.0.x 也能生成标准证书。
+- 注册口令不会写进系统日志：作为服务运行时，启动日志里只有地址和指纹。邀请码只在交互终端或 `--print` 时显示；安装脚本的输出被重定向时，邀请码存进 `/root/clarelay-invite.txt`（权限 600）。
+
 ### 3. 放行端口
 
 中继要能从外网访问，需要放行 **TCP 8790**（或你选的端口）：

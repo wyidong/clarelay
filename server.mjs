@@ -61,8 +61,9 @@ let tls = null, pin = '';
 if (!PLAIN) {
   const certF = path.join(DIR, 'cert.pem'), keyF = path.join(DIR, 'key.pem');
   if (!fs.existsSync(certF) || !fs.existsSync(keyF)) {
-    execFileSync('openssl', ['req', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:prime256v1', '-nodes', '-days', '3650',
-      '-subj', '/CN=relay', '-keyout', keyF, '-out', certF], { stdio: 'ignore' });
+    // 先用 ecparam 生成「命名曲线」的密钥（老的 openssl 1.0.x 用 req -newkey ec 会写成显式参数，不标准），再签自签证书
+    execFileSync('openssl', ['ecparam', '-name', 'prime256v1', '-genkey', '-noout', '-out', keyF], { stdio: 'ignore' });
+    execFileSync('openssl', ['req', '-x509', '-new', '-key', keyF, '-nodes', '-days', '3650', '-sha256', '-subj', '/CN=relay', '-out', certF], { stdio: 'ignore' });
     fs.chmodSync(keyF, 0o600);
   }
   tls = { cert: fs.readFileSync(certF), key: fs.readFileSync(keyF) };
@@ -186,6 +187,7 @@ if (process.argv.includes('--print')) {   // 只打印邀请码就退出（服�
 srv.listen(PORT, () => {
   console.log('clarelay ' + VERSION + ' 中继已启动：' + PUBLIC + (arg('public') ? '' : '（猜的地址；云服务器请用 --public https://公网IP:' + PORT + ' 指定）'));
   if (pin) console.log('证书指纹（pin）：' + pin);
-  console.log('注册口令：' + state.key + '（数据目录 ' + DIR + '）');
-  console.log('中继邀请码（只给要接入的人，内含注册口令）：\n' + makeInvite({ relay: PUBLIC, pin, key: state.key }));
+  // 注册口令只在交互终端里显示；作为服务运行时（systemd 等）不写进日志，要看邀请码用 --print
+  if (process.stdout.isTTY) console.log('中继邀请码（只给要接入的人，内含注册口令）：\n' + makeInvite({ relay: PUBLIC, pin, key: state.key }));
+  else console.log('数据目录 ' + DIR + '；查看中继邀请码：node server.mjs --data ' + DIR + ' --public ' + PUBLIC + ' --print');
 });

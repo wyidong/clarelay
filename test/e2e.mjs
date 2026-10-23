@@ -1,5 +1,5 @@
 // 端到端加密：把中继当成坏人（在它前面加一个能偷看、重放、篡改的中间层），确认它看不到、改不了、重放不了。
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import http from 'node:http';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -20,11 +20,11 @@ const svc = http.createServer((req, res) => {
 }).listen(0);
 const to = 'http://127.0.0.1:' + svc.address().port;
 
-const relay = spawn(process.execPath, [path.join(root, 'server.mjs'), '--plain', '--port', PORT, '--data', tmp, '--public', 'http://127.0.0.1:' + PORT]);
-const invite = await new Promise((ok, bad) => {
-  let out = ''; relay.stdout.on('data', c => { out += c; const m = out.match(/clarelay1\.[A-Za-z0-9_-]+/); if (m) ok(m[0]); });
-  relay.on('exit', () => bad(new Error(out)));
-});
+const relayArgs = ['--plain', '--port', PORT, '--data', tmp, '--public', 'http://127.0.0.1:' + PORT];
+const invite = execFileSync(process.execPath, [path.join(root, 'server.mjs'), ...relayArgs, '--print'], { encoding: 'utf8' }).match(/clarelay1\.[A-Za-z0-9_-]+/)[0];
+const relay = spawn(process.execPath, [path.join(root, 'server.mjs'), ...relayArgs]);
+let relayOut = ''; relay.stdout.on('data', c => relayOut += c);
+await new Promise((ok, bad) => { relay.stdout.on('data', () => ok()); relay.on('exit', () => bad(new Error('relay exited'))); });
 const t = await startTunnel({ invite, to, state: path.join(tmp, 'state.json') });
 
 // 坏中继：所有流量经过它，记录、可篡改

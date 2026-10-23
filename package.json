@@ -1,6 +1,6 @@
 {
   "name": "clarelay",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "零依赖的 HTTP 中继 + 隧道：让不在同一个局域网的电脑互相访问（自签证书 + 指纹钉死）",
   "type": "module",
   "exports": { ".": "./tunnel.mjs" },

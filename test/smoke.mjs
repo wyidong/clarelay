@@ -1,5 +1,5 @@
 // 端到端自测：起中继（https 自签）+ 本机假服务 + startTunnel，经公开地址发请求并核对指纹。
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import http from 'node:http';
 import https from 'node:https';
 import fs from 'node:fs';
@@ -19,11 +19,11 @@ const svc = http.createServer((req, res) => {
 }).listen(0);
 const to = 'http://127.0.0.1:' + svc.address().port;
 
-const relay = spawn(process.execPath, [path.join(root, 'server.mjs'), '--port', PORT, '--data', tmp, '--public', 'https://127.0.0.1:' + PORT]);
-const invite = await new Promise((ok, bad) => {
-  let out = ''; relay.stdout.on('data', c => { out += c; const m = out.match(/clarelay1\.[A-Za-z0-9_-]+/); if (m) ok(m[0]); });
-  relay.on('exit', () => bad(new Error(out)));
-});
+const relayArgs = ['--port', PORT, '--data', tmp, '--public', 'https://127.0.0.1:' + PORT];
+const invite = execFileSync(process.execPath, [path.join(root, 'server.mjs'), ...relayArgs, '--print'], { encoding: 'utf8' }).match(/clarelay1\.[A-Za-z0-9_-]+/)[0];
+const relay = spawn(process.execPath, [path.join(root, 'server.mjs'), ...relayArgs]);
+let relayOut = ''; relay.stdout.on('data', c => relayOut += c);
+await new Promise((ok, bad) => { relay.stdout.on('data', () => ok()); relay.on('exit', () => bad(new Error('relay exited'))); });
 const inv = parseInvite('请粘贴：' + invite + ' 谢谢');
 const statuses = [];
 const t = await startTunnel({ invite, to, state: path.join(tmp, 'tunnel.json'), onStatus: s => statuses.push(s) });
@@ -49,6 +49,7 @@ await t.stop();
 const t2 = await startTunnel({ invite, to, state: path.join(tmp, 'tunnel.json') });
 assert.equal(t2.publicUrl, t.publicUrl);
 await t2.stop();
+assert.ok(!relayOut.includes(inv.key) && !relayOut.includes('clarelay1.'), '注册口令进了服务日志');
 relay.kill(); svc.close(); fs.rmSync(tmp, { recursive: true, force: true });
 console.log('ok', statuses);
 process.exit(0);
