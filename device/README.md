@@ -71,10 +71,11 @@ await dev.stop()
 | 方向 | 消息 | 说明 |
 | --- | --- | --- |
 | 应用 → 外壳 | `{ type: 'ready', app, version }` | 加载好后发，发给 `parent`，origin 用 `'*'`，因为这时还不知道外壳的 origin |
-| 外壳 → 应用 | `{ type: 'embedded', shell, version }` | 告诉应用它在外壳里：隐藏自己的宿主切换和推送设置，记下 `shell` 作为之后发消息的目标 origin |
+| 外壳 → 应用 | `{ type: 'embedded', shell, version, insets: { top, bottom } }` | 告诉应用它在外壳里：隐藏自己的宿主切换和推送设置，记下 `shell` 作为之后发消息的目标 origin |
 | 应用 → 外壳 | `{ type: 'title', text }` | 外壳顶栏显示「电脑名 · text」 |
 | 应用 → 外壳 | `{ type: 'viewing', target }` | 用户正在看哪个对象；看着的对象不会被推送。离开时发 `target: ''` |
 | 外壳 → 应用 | `{ type: 'open', target }` | 打开某个对象（比如点了一条通知） |
+| 外壳 → 应用 | `{ type: 'insets', top, bottom }` | 安全区变了（转屏等）。iframe 铺到屏幕底边，iframe 里 `env(safe-area-inset-*)` 是 0，应用用这里的像素值给底部栏 / 输入区留边距 |
 
 iframe 的权限：`allow="clipboard-read; clipboard-write; microphone; autoplay; fullscreen"`。
 

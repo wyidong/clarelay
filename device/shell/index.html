@@ -82,7 +82,6 @@ input[type=checkbox]{width:22px;height:22px;accent-color:var(--acc)}
   #main{display:none;position:fixed;inset:0;z-index:5}
   body.open #main{display:flex}
   #back{display:inline-block}
-  #frames{margin-bottom:var(--bot)}
 }
 
 /* 设置：和 claclaw 一样的分组列表 */
@@ -166,7 +165,7 @@ input.sw:checked::after{left:22px}
   </aside>
   <main id="main">
     <div id="bar"><button id="back">‹ 宿主</button><span class="t" id="title">选择一台宿主</span><button id="solo" class="hidden" title="单独打开（可添加为这台宿主自己的主屏幕 App）">⇱</button><button id="reload" class="hidden" title="重新加载">↻</button></div>
-    <div id="frames"><div id="empty">选择一台宿主</div></div>
+    <div id="sa-probe" style="position:fixed;left:0;bottom:0;width:0;height:0;padding-bottom:env(safe-area-inset-bottom,0px);visibility:hidden;pointer-events:none"></div><div id="frames"><div id="empty">选择一台宿主</div></div>
   </main>
 </div>
 <script src="/app.js"></script>

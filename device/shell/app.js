@@ -158,6 +158,11 @@ $('solo').onclick = async () => {
     alert(`已复制「${d.name}」的一次性链接（10 分钟内有效，只能用一次）。\n\n到 Safari 粘贴打开 → 登录 claclaw → 分享 →「添加到主屏幕」，就有了这台电脑自己的 App，可以单独收它的通知。`);
   } else window.open(url, '_blank');
 };
+// iframe 一直铺到屏幕底边；iframe 里量不到安全区（env() 是 0），由外壳量好告诉应用，应用自己给底部留边距
+const insets = () => ({ top: 0, bottom: Math.round(parseFloat(getComputedStyle($('sa-probe')).paddingBottom) || 0) });
+let lastInsets = '';
+function sendInsets() { const i = insets(), k = JSON.stringify(i); if (k === lastInsets) return; lastInsets = k; for (const f of frames.values()) if (f.ready) post(f, { type: 'insets', ...i }); }
+addEventListener('resize', sendInsets); addEventListener('orientationchange', () => setTimeout(sendInsets, 300));
 const post = (f, m) => f.iframe.contentWindow?.postMessage({ clarelay: 1, ...m }, f.origin);
 
 // ---------- 和嵌入应用通信 ----------
@@ -170,7 +175,7 @@ window.addEventListener('message', e => {
   if (!f) return;                                   // 只认自己嵌入的电脑
   if (m.type === 'ready') {
     f.ready = true; f.app = String(m.app || '');
-    post(f, { type: 'embedded', shell: location.origin, version: me?.version });
+    post(f, { type: 'embedded', shell: location.origin, version: me?.version, insets: insets() });
     if (f.pendingOpen) { post(f, { type: 'open', target: f.pendingOpen }); f.pendingOpen = null; }
   } else if (m.type === 'title') {
     f.title = String(m.text || '').slice(0, 80);
