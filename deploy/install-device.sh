@@ -2,6 +2,8 @@
 # clarelay 设备组网中继一键安装（Linux + systemd）。在服务器上、clarelay 目录里用 root 运行：
 #   sudo sh deploy/install-device.sh myrelay.duckdns.org [--acme staging] [--email 你@例子.com]
 #   NODE=/path/to/node sudo -E sh deploy/install-device.sh …   # 指定 Node
+# 和已有网站共用 80/443（Nginx 按域名分流，见 deploy/nginx-clarelay.conf）：
+#   sudo sh deploy/install-device.sh relay.example.com --bind 127.0.0.1 --listen-https 18443 --listen-http 18080 --proxy-protocol
 # 前提：域名（含 *.域名）已解析到这台服务器；安全组放行 TCP 80、443。
 # 重复运行 = 升级（证书、管理员、设备都保留）。
 set -eu
@@ -17,7 +19,9 @@ done
 [ -n "$NODE_FOUND" ] || { echo "没找到 Node 18 以上：NODE=/新版/bin/node sudo -E sh deploy/install-device.sh $DOMAIN"; exit 1; }
 case "$NODE_FOUND" in /root/*|/home/*) echo "Node 不能放在 /root 或 /home 下（服务用户读不到）"; exit 1 ;; esac
 NODE="$NODE_FOUND"; echo "使用 Node：$NODE（$("$NODE" -v)）"
-for p in 80 443; do
+# 放在 Nginx 后面（参数里有 --listen-https）就不检查 80 / 443
+case " $EXTRA " in *" --listen-https "*) PORTS="" ;; *) PORTS="80 443" ;; esac
+for p in $PORTS; do
   if (ss -ltnH "sport = :$p" 2>/dev/null || netstat -ltn 2>/dev/null | grep ":$p ") | grep -q .; then
     systemctl is-active --quiet clarelay-device && continue
     echo "端口 $p 已被别的程序占用，先停掉它"; exit 1
