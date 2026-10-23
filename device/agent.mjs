@@ -218,19 +218,36 @@ export async function startDevice(o = {}) {
     r.on('response', res => { res.resume(); bad(Object.assign(new Error(res.statusCode === 401 ? '设备已被撤销或凭证无效' : 'HTTP ' + res.statusCode), { status: res.statusCode })); });
     r.on('timeout', () => r.destroy(new Error('timeout'))); r.on('error', bad); r.end();
   });
+  // 数据连接收到第一行 PROXY 头后，就在本机解开 HTTPS
+  function serveData(sock, onUsed) {
+    sock.setNoDelay(true);
+    let buf = Buffer.alloc(0);
+    const onData = d => {
+      buf = Buffer.concat([buf, d]);
+      const i = buf.indexOf('\r\n'); if (i < 0) { if (buf.length > 200) sock.destroy(); return; }
+      sock.removeListener('data', onData); sock.pause();
+      onUsed?.();
+      const line = buf.subarray(0, i).toString('latin1').split(' ');   // PROXY TCP4 ip 0.0.0.0 port 443
+      serveTls(local, prefixed(sock, buf.subarray(i + 2)), () => localCtx, line[0] === 'PROXY' ? line[2] : '');
+    };
+    sock.on('data', onData); sock.on('error', () => {});
+  }
   function openData(id) {
-    upgradeReq('/_device/accept?id=' + encodeURIComponent(id)).then(sock => {
-      sock.setNoDelay(true);
-      let buf = Buffer.alloc(0);
-      const onData = d => {
-        buf = Buffer.concat([buf, d]);
-        const i = buf.indexOf('\r\n'); if (i < 0) { if (buf.length > 200) sock.destroy(); return; }
-        sock.removeListener('data', onData); sock.pause();
-        const line = buf.subarray(0, i).toString('latin1').split(' ');   // PROXY TCP4 ip 0.0.0.0 port 443
-        serveTls(local, prefixed(sock, buf.subarray(i + 2)), () => localCtx, line[0] === 'PROXY' ? line[2] : '');
-      };
-      sock.on('data', onData); sock.on('error', () => {});
-    }).catch(e => log('数据连接失败：' + e.message));
+    upgradeReq('/_device/accept?id=' + encodeURIComponent(id)).then(sock => serveData(sock)).catch(e => log('数据连接失败：' + e.message));
+  }
+  // 预先连好几条空闲数据连接放在中继上：手机来访问时直接用，首次打开快很多（中继远的时候每条新连接要多花约 1 秒）
+  const POOL = o.pool ?? 4;
+  let pooled = 0;
+  function fillPool() {
+    if (stopped || status !== 'active' || !online) return;
+    while (pooled < POOL) {
+      pooled++;
+      upgradeReq('/_device/accept?pool=1').then(sock => {
+        let used = false;
+        sock.on('close', () => { if (!used) { pooled--; setTimeout(fillPool, 3000); } });
+        serveData(sock, () => { used = true; pooled--; fillPool(); });
+      }).catch(() => { pooled--; setTimeout(fillPool, 5000); });
+    }
   }
   async function connect() {
     while (!stopped) {
@@ -261,11 +278,12 @@ export async function startDevice(o = {}) {
       if (m.gatePub && m.gatePub !== st.gatePub) st.gatePub = m.gatePub;
       st.status = status; saveState();
       online = true; emitStatus(); log('已连上中继（' + (status === 'active' ? '已生效' : '等管理员批准') + '）：' + URL_SELF);
-      if (status === 'active') ensureCert();
+      if (status === 'active') { ensureCert(); fillPool(); }
     } else if (m.t === 'open') openData(m.id);
+    else if (m.t === 'pool-used') fillPool();
     else if (m.t === 'sessions') { sids = new Set(m.sids || []); if (m.enrolls) enrolls = new Set(m.enrolls); }
     else if (m.t === 'settings') snippetChars = m.snippetChars ?? snippetChars;
-    else if (m.t === 'status') { status = m.status; st.status = status; if (m.name) st.name = m.name; saveState(); emitStatus(); if (status === 'active') ensureCert(); }
+    else if (m.t === 'status') { status = m.status; st.status = status; if (m.name) st.name = m.name; saveState(); emitStatus(); if (status === 'active') { ensureCert(); fillPool(); } }
     else if (m.t === 'acme') sendCtrl?.({ t: 'acme', id: m.id, keyAuth: acmeTokens.get(m.token) || '' });
     else if (m.t === 'revoked') { status = 'revoked'; st.revoked = true; saveState(); emitStatus(); stopped = true; }
   }

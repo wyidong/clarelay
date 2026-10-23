@@ -133,6 +133,18 @@ const online = new Map();      // 设备 id → { send, sock, services, lastSeen
 const pendingOpen = new Map(); // 数据连接编号 → { sock, buf, ip, port, deviceId, timer }
 const acmeAsk = new Map();     // 问设备要验证内容：编号 → resolve
 const streams = new Map();     // 设备 id → 正在转发的连接（撤销时全部掐断）
+const idle = new Map();        // 设备 id → 预先连好的空闲数据连接
+// 把访问者的连接接到一条数据连接上：先写 PROXY 头（真实来源 IP），再原样对接
+function attach(j, sock, deviceId) {
+  sock.removeAllListeners('close'); sock.removeAllListeners('error');
+  sock.write(`PROXY TCP4 ${j.ip.includes(':') ? '0.0.0.0' : j.ip} 0.0.0.0 ${j.port} ${HTTPS_PORT}\r\n`);
+  sock.write(j.buf);
+  j.sock.pipe(sock); sock.pipe(j.sock);
+  const set = streams.get(deviceId) || new Set(); streams.set(deviceId, set); set.add(j.sock);
+  const kill = () => { j.sock.destroy(); sock.destroy(); set.delete(j.sock); };
+  j.sock.on('error', kill); sock.on('error', kill); j.sock.on('close', kill); sock.on('close', kill);
+  j.sock.resume();
+}
 const deviceByLabel = label => Object.values(S.devices).find(d => d.label === label);
 const pubDevice = d => ({ id: d.id, name: d.name, label: d.label, url: 'https://' + d.label + '.' + DOMAIN + (HTTPS_PORT === 443 ? '' : ':' + HTTPS_PORT), status: d.status,
   online: online.has(d.id), services: online.get(d.id)?.services || d.services || [], lastSeen: d.lastSeen, created: d.created, version: d.version || '' });
@@ -415,7 +427,7 @@ async function handle(req, res) {
       else return send(res, 400, { error: '不支持的操作' });
       saveNow();
       const o = online.get(d.id);
-      if (d.status === 'revoked') { for (const x of streams.get(d.id) || []) x.destroy(); streams.delete(d.id); }
+      if (d.status === 'revoked') { for (const x of [...(streams.get(d.id) || []), ...(idle.get(d.id) || [])]) x.destroy(); streams.delete(d.id); idle.delete(d.id); }
       if (o) { if (d.status === 'revoked' || !S.devices[d.id]) { o.send({ t: 'revoked' }); o.sock.destroy(); online.delete(d.id); } else o.send({ t: 'status', status: d.status, name: d.name }); }
       log('设备' + b.action + '：' + d.name);
       devicesChanged(); broadcast('unread', unreadList());
@@ -474,16 +486,19 @@ function upgrade(req, sock, head) {
     return;
   }
   if (u.pathname === '/_device/accept') {
+    if (u.searchParams.get('pool')) {   // 电脑预先连好的空闲数据连接：有人来访问时直接用，省掉临时建连接的几个来回
+      const list = idle.get(d.id) || []; idle.set(d.id, list);
+      if (list.length >= 8) { sock.destroy(); return; }
+      list.push(sock);
+      const drop = () => { const i = list.indexOf(sock); if (i >= 0) list.splice(i, 1); };
+      sock.on('close', drop); sock.on('error', () => { drop(); sock.destroy(); });
+      sock.setKeepAlive(true, 30e3);
+      return;
+    }
     const j = pendingOpen.get(String(u.searchParams.get('id') || ''));
     if (!j || j.deviceId !== d.id) { sock.destroy(); return; }
     pendingOpen.delete(j.id); clearTimeout(j.timer);
-    sock.write(`PROXY TCP4 ${j.ip.includes(':') ? '0.0.0.0' : j.ip} 0.0.0.0 ${j.port} ${HTTPS_PORT}\r\n`);
-    sock.write(j.buf);
-    j.sock.pipe(sock); sock.pipe(j.sock);
-    const set = streams.get(d.id) || new Set(); streams.set(d.id, set); set.add(j.sock);
-    const kill = () => { j.sock.destroy(); sock.destroy(); set.delete(j.sock); };
-    j.sock.on('error', kill); sock.on('error', kill); j.sock.on('close', kill); sock.on('close', kill);
-    j.sock.resume();
+    attach(j, sock, d.id);
     return;
   }
   sock.destroy();
@@ -509,6 +524,8 @@ const front = net.createServer(sock => {
     const d = label && !label.includes('.') ? deviceByLabel(label) : null;
     const o = d && d.status === 'active' ? online.get(d.id) : null;
     if (!o) { sock.destroy(); return; }
+    const pool = idle.get(d.id);
+    while (pool && pool.length) { const ds = pool.shift(); if (!ds.destroyed && ds.writable) { attach({ sock, buf, ip: ipOf(sock), port: sock.remotePort || 0 }, ds, d.id); o.send({ t: 'pool-used' }); return; } }
     const id = rand(12);
     pendingOpen.set(id, { id, sock, buf, ip: ipOf(sock), port: sock.remotePort || 0, deviceId: d.id, timer: setTimeout(() => { pendingOpen.delete(id); sock.destroy(); }, 15e3) });
     o.send({ t: 'open', id });
