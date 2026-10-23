@@ -80,6 +80,18 @@ curl -k --pinnedpubkey 'sha256//…' https://<服务器公网IP>:8790/_relay/ver
 | **换掉证书和口令**（邀请码泄露时） | `sudo systemctl stop clarelay && sudo rm -rf /var/lib/clarelay/* && sudo systemctl start clarelay`，之后重新查看邀请码。旧邀请码、旧地址全部作废，所有人都要用新邀请码重新接入 |
 | 卸载 | `sudo systemctl disable --now clarelay && sudo rm -rf /etc/systemd/system/clarelay.service /opt/clarelay /var/lib/clarelay && sudo userdel clarelay`，再在安全组里关掉端口 |
 
+### 从一台已有的中继直接拿程序
+
+每台中继都会公开提供自己正在跑的程序和文档。这些文件里没有任何数据和口令：`/server.mjs`、`/tunnel.mjs`、`/package.json`、`/README.md`、`/PROTOCOL.md`、`/deploy/install.sh`、`/deploy/clarelay.service`。`/_relay/version` 会列出版本号和每个文件的 SHA-256。没法访问 GitHub 时：
+
+```sh
+P='sha256//…'; R=https://<已有中继>:8790
+mkdir -p clarelay/deploy && cd clarelay
+for f in server.mjs tunnel.mjs package.json README.md PROTOCOL.md deploy/install.sh deploy/clarelay.service; do
+  curl -fsSk --pinnedpubkey "$P" "$R/$f" -o "$f"; done
+sudo sh deploy/install.sh https://<自己服务器公网IP>:8790
+```
+
 ### 不用 systemd 的手动运行方式
 
 可以先用这种方式临时试一下：

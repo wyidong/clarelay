@@ -34,7 +34,13 @@ const PORT = Number(arg('port', 8790));
 const PLAIN = process.argv.includes('--plain');
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const DIR = path.resolve(arg('data', path.join(HERE, 'relay-data')));
-const TUNNEL_SRC = fs.readFileSync(path.join(HERE, 'tunnel.mjs'));   // 公开提供下载：同事不用装任何东西
+// 公开提供下载：同事不用装任何东西；想自建中继的人也能直接拿到和这台一模一样的程序（不含任何数据和口令）
+const PUBLIC_FILES = { '/tunnel.mjs': 'tunnel.mjs', '/server.mjs': 'server.mjs', '/package.json': 'package.json', '/README.md': 'README.md',
+  '/PROTOCOL.md': 'PROTOCOL.md', '/deploy/install.sh': 'deploy/install.sh', '/deploy/clarelay.service': 'deploy/clarelay.service' };
+const FILES = {};
+for (const [k, f] of Object.entries(PUBLIC_FILES)) try { FILES[k] = fs.readFileSync(path.join(HERE, f)); } catch {}
+FILES['/_relay/tunnel.mjs'] = FILES['/tunnel.mjs'];
+const typeOf = k => k.endsWith('.mjs') ? 'text/javascript' : k.endsWith('.json') ? 'application/json' : k.endsWith('.md') ? 'text/markdown' : 'text/plain';
 const MAX_BODY = 3 * 1024 * 1024;          // 单个请求 / 响应最多 3MB（端到端加密后体积会变大，内容实际约 1MB）
 const REQ_TIMEOUT = 11 * 60 * 1000;        // 等本地服务回应最多 11 分钟（claclaw 协同一轮最多 10 分钟）
 const POLL_WAIT = 25 * 1000;               // 隧道一次长轮询等多久
@@ -106,12 +112,14 @@ async function handler(req, res) {
   const u = new URL(req.url, 'http://x');
   try {
     // ---- 隧道这一侧：领地址、取请求、交响应（都要注册口令 + 这个名字的隧道密钥） ----
-    if (u.pathname === '/tunnel.mjs' || u.pathname === '/_relay/tunnel.mjs') {
+    if (FILES[u.pathname] && req.method === 'GET') {
       if (limited(ipOf(req))) return send(res, 429, { error: '请求太频繁' });
-      res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-store' });
-      return res.end(TUNNEL_SRC);
+      res.writeHead(200, { 'content-type': typeOf(u.pathname) + '; charset=utf-8', 'cache-control': 'no-store' });
+      return res.end(FILES[u.pathname]);
     }
-    if (u.pathname === '/_relay/version') return send(res, 200, { ok: true, name: 'clarelay', version: VERSION });
+    if (u.pathname === '/_relay/version') return send(res, 200, { ok: true, name: 'clarelay', version: VERSION,
+      files: Object.keys(FILES).filter(k => !k.startsWith('/_relay/')),
+      sha256: Object.fromEntries(Object.entries(FILES).filter(([k]) => !k.startsWith('/_relay/')).map(([k, v]) => [k, crypto.createHash('sha256').update(v).digest('hex')])) });
     if (u.pathname.startsWith('/_relay/')) {
       if (!safeEq(req.headers['x-relay-key'], state.key) && limited(ipOf(req))) return send(res, 429, { error: '请求太频繁' });
       if (!safeEq(req.headers['x-relay-key'], state.key)) return send(res, 401, { error: '注册口令不对' });

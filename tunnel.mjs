@@ -18,7 +18,7 @@ import crypto from 'node:crypto';
 import tls from 'node:tls';
 import { fileURLToPath } from 'node:url';
 
-export const VERSION = '0.2.0';
+export const VERSION = '0.2.1';
 const INVITE_PREFIX = 'clarelay1.';
 const MAX_BODY = 1024 * 1024;
 

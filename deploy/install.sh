@@ -17,6 +17,8 @@ SRC=$(cd "$(dirname "$0")/.." && pwd)
 id clarelay >/dev/null 2>&1 || useradd --system --home-dir /var/lib/clarelay --shell /usr/sbin/nologin clarelay 2>/dev/null || useradd -r -d /var/lib/clarelay -s /sbin/nologin clarelay
 install -d -m 755 /opt/clarelay
 install -m 644 "$SRC/server.mjs" "$SRC/tunnel.mjs" "$SRC/package.json" /opt/clarelay/
+for f in README.md PROTOCOL.md; do [ -f "$SRC/$f" ] && install -m 644 "$SRC/$f" /opt/clarelay/; done
+install -d -m 755 /opt/clarelay/deploy && install -m 644 "$SRC/deploy/install.sh" "$SRC/deploy/clarelay.service" /opt/clarelay/deploy/
 install -d -m 700 -o clarelay -g clarelay /var/lib/clarelay
 
 sed -e "s#@NODE@#$NODE#g" -e "s#@PUBLIC@#$PUBLIC#g" -e "s#@PORT@#$PORT#g" "$SRC/deploy/clarelay.service" > /etc/systemd/system/clarelay.service
