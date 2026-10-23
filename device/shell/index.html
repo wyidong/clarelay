@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#161B21" media="(prefers-color-scheme: dark)"><meta name="theme-color" content="#FFFFFF" media="(prefers-color-scheme: light)">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="clarelay">
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" href="/icon.svg">
@@ -15,7 +15,7 @@
 :root{--bg:#F1F3F5;--card:#FFFFFF;--fg:#14181C;--mut:#66707B;--line:#DDE1E6;--acc:#12864A;--acc-ink:#FFFFFF;--soft:#DDF3E6;--ok:#12864A;--bad:#D93636;--top:env(safe-area-inset-top,0px);--bot:env(safe-area-inset-bottom,0px)}
 @media (prefers-color-scheme:dark){:root{--bg:#0E1115;--card:#161B21;--fg:#E7EBEF;--mut:#8B95A1;--line:#262D35;--acc:#3FCB86;--acc-ink:#0E1115;--soft:#173A2A;--ok:#3FCB86}}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font:15px/1.45 -apple-system,BlinkMacSystemFont,"PingFang SC","Segoe UI",sans-serif}
+html,body{margin:0;height:100%;overflow:hidden;overscroll-behavior:none;background:var(--bg);color:var(--fg);font:15px/1.45 -apple-system,BlinkMacSystemFont,"PingFang SC","Segoe UI",sans-serif}
 button{font:inherit;border:1px solid var(--line);background:var(--card);color:var(--fg);border-radius:10px;padding:7px 13px;cursor:pointer}
 button.pri{background:var(--acc);border-color:var(--acc);color:var(--acc-ink);font-weight:600}
 button.bad{color:var(--bad)}
@@ -25,7 +25,7 @@ input,select{font:inherit;padding:9px 11px;border:1px solid var(--line);border-r
 #login h1{margin:0 0 16px;font-size:22px}
 #login input{margin-bottom:10px}
 #login .err{color:var(--bad);min-height:1.4em;font-size:13px}
-#app{display:flex;position:fixed;inset:0;height:100dvh}   /* iOS 主屏幕 App 里 height:100% 不到底，用 fixed 铺满整屏 */
+#app{display:flex;height:100%}   /* 和 claclaw 一样：状态栏 default + html/body 100%，iOS 主屏幕 App 里底部菜单贴底 */
 /* 左栏（手机上是整屏）：标题 + 当前分页 + 底部菜单 */
 #side{width:380px;flex:none;height:100%;border-right:1px solid var(--line);background:var(--bg);display:flex;flex-direction:column;min-height:0}
 #side>header{display:flex;align-items:center;gap:8px;padding:calc(var(--top) + 12px) 16px 10px;background:var(--card);border-bottom:1px solid var(--line)}

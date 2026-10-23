@@ -67,6 +67,7 @@ async function start() {
   updatePushButton();
   $('me-info').innerHTML = `${esc(me.user)}<small>${esc(me.domain)} · clarelay ${esc(me.version)} · 页面版本 ${esc(MY_V || '?')}</small>`;
   markUpdate(me.shell);
+  fillSettings(me.settings);
   connectEvents();
 }
 function connectEvents() {
@@ -238,7 +239,7 @@ async function loadAdmin() {
       ${d.status !== 'revoked' ? `<button data-dev="${esc(d.id)}" data-act="rename">改名</button><button class="bad" data-dev="${esc(d.id)}" data-act="revoke">撤销</button>` : `<button class="bad" data-dev="${esc(d.id)}" data-act="delete">删除</button>`}
     </div>`).join('') : '<small>还没有设备</small>';
   $('adm-sess').innerHTML = s.enrolls.map(x => `<div class="row"><span class="grow">${esc(x.note || x.ua)}${x.current ? ' <span class="pill">本机</span>' : ''}<small>${esc(x.ua)} · ${esc(x.via || '')} · ${esc(x.ip || '')} · 最后活动 ${ago(x.lastSeen)}${x.loggedIn ? ' · 已登录' : ' · 未登录'}${x.push ? ' · 已开通知' : ''}</small></span>${x.current ? '' : `<button class="bad" data-enr="${esc(x.id)}">取消授权</button>`}</div>`).join('');
-  $('set-approve').checked = s.settings.requireApproval; $('set-notify').checked = s.settings.notify; $('set-chars').value = s.settings.snippetChars;
+  fillSettings(s.settings);
   for (const b of document.querySelectorAll('[data-inv]')) b.onclick = async () => { await api('/api/admin/invite/delete', { id: b.dataset.inv }); loadAdmin(); };
   for (const b of document.querySelectorAll('[data-dev]')) b.onclick = async () => {
     const act = b.dataset.act, d = s.devices.find(x => x.id === b.dataset.dev);
@@ -265,6 +266,7 @@ $('inv-new').onclick = async () => {
   $('inv-copy').onclick = () => navigator.clipboard.writeText(r.invite).then(() => { $('inv-copy').textContent = '已复制'; });
   $('inv-note').value = ''; loadAdmin();
 };
+function fillSettings(x) { if (!x) return; $('set-approve').checked = !!x.requireApproval; $('set-notify').checked = !!x.notify; $('set-chars').value = x.snippetChars; }
 const saveSettings = () => api('/api/admin/settings', { requireApproval: $('set-approve').checked, notify: $('set-notify').checked, snippetChars: Number($('set-chars').value) }).catch(e => alert(e.message));
 $('set-approve').onchange = saveSettings; $('set-notify').onchange = saveSettings; $('set-chars').onchange = saveSettings;
 $('push-test').onclick = async () => { const r = await api('/api/push/test', {}); alert(r.sent ? '已发出，看看手机' : '这个浏览器还没开启通知'); };
