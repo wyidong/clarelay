@@ -14,7 +14,7 @@ const api = async (p, body) => {
 };
 const ago = t => { if (!t) return ''; const s = (Date.now() - t) / 1000; return s < 60 ? '刚刚' : s < 3600 ? Math.floor(s / 60) + ' 分钟前' : s < 86400 ? Math.floor(s / 3600) + ' 小时前' : Math.floor(s / 86400) + ' 天前'; };
 
-let me = null, devices = [], unread = [], current = null, view = 'none', es = null;
+let me = null, devices = [], unread = [], current = null, view = 'none', es = null, tab = 'hosts';
 const frames = new Map();          // 设备 id → { iframe, origin, ready, pendingOpen }
 const params = new URLSearchParams(location.search);
 
@@ -39,6 +39,7 @@ async function start() {
   $('login').classList.add('hidden'); $('app').classList.remove('hidden');
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
   updatePushButton();
+  $('me-info').innerHTML = `${esc(me.user)}<small>${esc(me.domain)} · clarelay ${esc(me.version)}</small>`;
   connectEvents();
 }
 function connectEvents() {
@@ -46,7 +47,7 @@ function connectEvents() {
   es = new EventSource('/api/events');
   es.addEventListener('devices', e => { devices = JSON.parse(e.data); render(); });
   es.addEventListener('unread', e => { unread = JSON.parse(e.data); render(); });
-  es.addEventListener('sessions', () => { if (view === 'admin') loadAdmin(); });
+  es.addEventListener('sessions', () => { if (tab === 'admin') loadAdmin(); });
   es.onerror = () => { fetch('/api/me').then(r => { if (r.status === 401) showLogin(); }); };
 }
 
@@ -54,13 +55,14 @@ function connectEvents() {
 const unreadOf = id => unread.filter(u => u.device === id).reduce((n, u) => n + (u.unread || 0), 0);
 function render() {
   const list = devices.filter(d => d.status === 'active');
+  const HOST = '<svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>';
   $('devs').innerHTML = list.length ? list.map(d => {
     const n = unreadOf(d.id);
     return `<div class="dev ${current === d.id && view === 'device' ? 'sel' : ''}" data-id="${esc(d.id)}">
-      <span class="dot ${d.online ? 'on' : ''}"></span>
-      <span class="nm">${esc(d.name)}<small>${d.online ? (d.services.length ? esc(d.services.join(' · ')) : '在线') : '离线 · ' + ago(d.lastSeen)}</small></span>
-      ${n ? `<span class="badge">${n > 99 ? '99+' : n}</span>` : ''}</div>`;
-  }).join('') : '<div id="empty">还没有电脑加入。点「管理」生成邀请码。</div>';
+      <span class="ic">${HOST}<span class="dot ${d.online ? 'on' : ''}"></span></span>
+      <span class="nm">${esc(d.name)}<small>${d.online ? '在线' + (d.services.length ? ' · ' + esc(d.services.join(' · ')) : '') : '离线 · ' + ago(d.lastSeen)}</small></span>
+      ${n ? `<span class="badge">${n > 99 ? '99+' : n}</span>` : ''}<span class="chev">›</span></div>`;
+  }).join('') : '<div class="empty-tip">还没有宿主加入。<br>到「管理」生成邀请码，在电脑上加入。</div>';
   for (const el of $('devs').querySelectorAll('.dev')) el.onclick = () => openDevice(el.dataset.id);
   const total = unread.reduce((n, u) => n + (u.unread || 0), 0);
   $('total').textContent = total > 99 ? '99+' : total; $('total').classList.toggle('hidden', !total);
@@ -70,7 +72,8 @@ function render() {
     if (!d || d.status !== 'active') closeDevice();
   }
   const pending = devices.filter(d => d.status === 'pending').length;
-  $('btn-admin').textContent = pending ? `管理（${pending} 台待批准）` : '管理';
+  document.querySelector('#mtabs [data-tab="admin"]').classList.toggle('dot', pending > 0);
+  document.querySelector('#mtabs [data-tab="hosts"]').classList.toggle('dot', unread.length > 0);
 }
 
 // ---------- 打开一台电脑（iframe） ----------
@@ -79,7 +82,7 @@ async function openDevice(id, back = '/', openTarget = null) {
   if (!d) return;
   current = id; view = 'device';
   document.body.classList.add('open');
-  $('admin').classList.add('hidden'); $('frames').classList.remove('hidden'); $('reload').classList.remove('hidden'); $('solo').classList.remove('hidden');
+  $('reload').classList.remove('hidden'); $('solo').classList.remove('hidden');
   $('title').textContent = d.name + (frames.get(id)?.title ? ' · ' + frames.get(id).title : '');
   for (const [k, f] of frames) f.iframe.classList.toggle('hidden', k !== id);
   $('empty')?.classList.add('hidden');
@@ -105,7 +108,8 @@ function showEmpty(text) {
   for (const f of frames.values()) f.iframe.classList.add('hidden');
 }
 function closeDevice() {
-  document.body.classList.remove('open'); view = 'none';
+  document.body.classList.remove('open'); view = 'none'; current = null;
+  $('title').textContent = '选择一台宿主'; $('solo').classList.add('hidden'); $('reload').classList.add('hidden');
   api('/api/viewing', {}).catch(() => {});
   render();
 }
@@ -181,11 +185,17 @@ async function updatePushButton() {
 $('btn-logout').onclick = async () => { if (!confirm('退出登录？')) return; await api('/api/logout', {}).catch(() => {}); location.href = '/'; };
 
 // ---------- 管理 ----------
-$('btn-admin').onclick = () => {
-  view = 'admin'; current = null; document.body.classList.add('open');
-  $('frames').classList.add('hidden'); $('reload').classList.add('hidden'); $('solo').classList.add('hidden'); $('admin').classList.remove('hidden');
-  $('title').textContent = '管理'; render(); loadAdmin();
-};
+// ---------- 底部菜单 ----------
+const TAB_TITLE = { hosts: '宿主', admin: '管理', set: '设置' };
+function setTab(t) {
+  tab = t;
+  for (const b of document.querySelectorAll('#mtabs button')) b.classList.toggle('on', b.dataset.tab === t);
+  for (const k of Object.keys(TAB_TITLE)) $('pane-' + k).classList.toggle('hidden', k !== t);
+  $('ptitle').textContent = TAB_TITLE[t];
+  $('panes').scrollTop = 0;
+  if (t === 'admin' || t === 'set') loadAdmin().catch(() => {});
+}
+for (const b of document.querySelectorAll('#mtabs button')) b.onclick = () => setTab(b.dataset.tab);
 async function loadAdmin() {
   const s = await api('/api/admin/state');
   $('inv-list').innerHTML = s.invites.map(i => `<div class="row"><span class="grow">${esc(i.note || '（无备注）')}<small>${new Date(i.expires).toLocaleString()} 前有效</small></span><button class="bad" data-inv="${esc(i.id)}">作废</button></div>`).join('');
