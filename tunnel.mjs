@@ -50,10 +50,16 @@ export const isInvite = s => { try { parseInvite(s); return true; } catch { retu
 // ---------- 证书指纹核对：握手完成后、发出任何数据之前 ----------
 // 注意：rejectUnauthorized:false 时 checkServerIdentity 不会被调用，所以必须自己在 secureConnect 里核。
 export const pinOf = cert => 'sha256//' + crypto.createHash('sha256').update(cert.publicKey.export({ type: 'spki', format: 'der' })).digest('base64');
+const CONNECT_MS = 15000;
 export function pinnedConnector(pin) {
   return (opts, cb) => {
     const s = tls.connect({ host: opts.host, port: opts.port, servername: opts.servername, rejectUnauthorized: false });
+    // 回调式 createConnection 交出 socket 前，http 的 timeout 管不到：中继端口被防火墙丢包时会一直挂着，这里自己限时
+    const ms = Math.min(opts.timeout || CONNECT_MS, CONNECT_MS);
+    const t = setTimeout(() => s.destroy(Object.assign(new Error('连接中继超时（' + ms / 1000 + ' 秒）'), { code: 'ETIMEDOUT' })), ms);
+    s.once('close', () => clearTimeout(t));
     s.once('secureConnect', () => {
+      clearTimeout(t);
       const got = pinOf(s.getPeerX509Certificate());
       if (got === pin) cb(null, s);
       else { s.destroy(); cb(new Error('中继证书指纹对不上（' + got + '），拒绝连接')); }
