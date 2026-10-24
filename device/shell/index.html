@@ -43,7 +43,7 @@ input,select{font:inherit;padding:9px 11px;border:1px solid var(--line);border-r
 .dev .ic svg{width:24px;height:24px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
 .dev .ic .dot{position:absolute;right:-2px;bottom:-2px;width:12px;height:12px;border-radius:50%;background:var(--mut);border:2px solid var(--card)}
 .dev .ic .dot.on{background:var(--ok)}
-.dev .nm{flex:1;min-width:0;font-weight:600}
+.dev .nm{flex:1;min-width:0;font-weight:600;color:var(--acc)}
 .dev .nm small{display:block;font-weight:400;color:var(--mut);font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .dev .chev{flex:none;color:var(--mut)}
 .badge{min-width:20px;height:20px;padding:0 6px;border-radius:10px;background:var(--bad);color:#fff;font-size:12px;font-weight:600;display:inline-flex;align-items:center;justify-content:center}
@@ -71,8 +71,9 @@ input[type=checkbox]{width:22px;height:22px;accent-color:var(--acc)}
 /* 右侧 / 进入宿主后的整屏 */
 #main{flex:1;display:flex;flex-direction:column;min-width:0;background:var(--bg)}
 #bar{display:flex;align-items:center;gap:8px;padding:calc(var(--top) + 6px) 10px 6px;border-bottom:1px solid var(--line);background:var(--card);min-height:calc(var(--top) + 50px)}
-#bar .t{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600}
-#bar button{border:0;background:none;color:var(--acc);font-size:16px;padding:6px 8px}
+#bar .t{flex:1;color:var(--acc);min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600}
+#bar button{border:0;background:none;color:var(--acc);font-size:16px;padding:6px 8px;display:flex;align-items:center}
+#bar #solo,#bar #reload{padding:6px}
 #back{display:none}
 #frames{flex:1;position:relative}
 #frames iframe{position:absolute;inset:0;width:100%;height:100%;border:0;background:var(--bg)}
@@ -164,7 +165,7 @@ input.sw:checked::after{left:22px}
     </nav>
   </aside>
   <main id="main">
-    <div id="bar"><button id="back">‹ 宿主</button><span class="t" id="title">选择一台宿主</span><button id="solo" class="hidden" title="单独打开（可添加为这台宿主自己的主屏幕 App）">⇱</button><button id="reload" class="hidden" title="重新加载">↻</button></div>
+    <div id="bar"><button id="back">‹ 宿主</button><span class="t" id="title">选择一台宿主</span><button id="solo" class="hidden" title="单独打开（可添加为这台宿主自己的主屏幕 App）"><svg class="ri" viewBox="0 0 24 24"><path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M19 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5"/></svg></button><button id="reload" class="hidden" title="重新加载"><svg class="ri" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/></svg></button></div>
     <div id="sa-probe" style="position:fixed;left:0;bottom:0;width:0;height:0;padding-bottom:env(safe-area-inset-bottom,0px);visibility:hidden;pointer-events:none"></div><div id="frames"><div id="empty">选择一台宿主</div></div>
   </main>
 </div>
